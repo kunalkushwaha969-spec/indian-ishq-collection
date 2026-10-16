@@ -1,0 +1,65 @@
+[
+  {
+    "id": "IIC-555958",
+    "customer_details": {
+      "name": "Ananya Sharma",
+      "phone": "9876543210",
+      "address": "Flat 402, Lotus Enclave, MG Road, Jaipur",
+      "city": "Jaipur",
+      "pincode": "302001"
+    },
+    "items": [
+      {
+        "id": "prod-001",
+        "name": "Gulabi Noor Anarkali Set",
+        "price": 1899,
+        "qty": 1
+      }
+    ],
+    "payment_method": "UPI",
+    "status": "Confirmed",
+    "total": 1998,
+    "created_at": "2026-10-16T10:15:18.287Z"
+  },
+  {
+    "id": "IIC-902148",
+    "customer_details": {
+      "name": "Priyanka Verma",
+      "phone": "9820112345",
+      "address": "A-304, Green Heights, Andheri West, Mumbai, Maharashtra 400053"
+    },
+    "items": [
+      {
+        "id": "prod-001",
+        "name": "Gulabi Noor Anarkali Set",
+        "price": 1899,
+        "qty": 1
+      }
+    ],
+    "payment_method": "UPI",
+    "upi_ref_id": "UPI902838194",
+    "status": "Confirmed",
+    "total": 1899,
+    "created_at": "2026-10-16T06:13:47.467Z"
+  },
+  {
+    "id": "IIC-891024",
+    "customer_details": {
+      "name": "Aditi Sharma",
+      "phone": "9845098765",
+      "address": "Plot 12, Indiranagar, Bengaluru, Karnataka 560038"
+    },
+    "items": [
+      {
+        "id": "prod-002",
+        "name": "Mogra Pure Cotton Daily Kurti",
+        "price": 899,
+        "qty": 1
+      }
+    ],
+    "payment_method": "COD",
+    "status": "Packed",
+    "total": 998,
+    "created_at": "2026-10-15T14:13:47.467Z"
+  }
+]

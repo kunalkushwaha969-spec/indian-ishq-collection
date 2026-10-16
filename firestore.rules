@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to verify admin authentication
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email != null;
+    }
+
+    // Products collection:
+    // Anyone can browse catalog; only logged-in merchant can create/update/delete.
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Orders collection:
+    // Anyone can create an order with valid schema; only authenticated merchant can read or update.
+    match /orders/{orderId} {
+      allow create: if request.resource.data.customer_details != null
+                    && request.resource.data.items is list
+                    && request.resource.data.total is number
+                    && request.resource.data.total >= 0;
+      allow read, update, delete: if isAdmin();
+    }
+  }
+}

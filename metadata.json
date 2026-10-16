@@ -1,0 +1,6 @@
+{
+  "name": "Indian Ishq Collection",
+  "description": "Production-ready ethnic wear e-commerce store with live cloud catalog, dynamic UPI QR code & COD checkout, merchant admin dashboard, and cloud image uploads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

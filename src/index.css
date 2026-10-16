@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --wine: #70283b;
+    --wine2: #4c1727;
+    --rose: #f3dfe0;
+    --cream: #fbf7f0;
+    --gold: #b78a4b;
+    --ink: #292222;
+    --muted: #776c6b;
+    --line: #eadfda;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+}

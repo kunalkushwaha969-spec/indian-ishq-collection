@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Indian Ishq Collection | Wear Your Story</title>
+    <meta name="description" content="Production-ready ethnic wear e-commerce store with live cloud catalog, dynamic UPI QR code & COD checkout, merchant admin dashboard, and cloud image uploads." />
+    <meta property="og:title" content="Indian Ishq Collection | Wear Your Story" />
+    <meta property="og:description" content="Production-ready ethnic wear e-commerce store with live cloud catalog, dynamic UPI QR code & COD checkout, merchant admin dashboard, and cloud image uploads." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Prevent unhandled WebSocket rejections from breaking the UI in sandboxed environments
+      window.addEventListener('unhandledrejection', function(e) {
+        var reason = (e && e.reason && (e.reason.message || e.reason.toString())) || '';
+        if (typeof reason === 'string' && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('closed without opened') !== -1)) {
+          e.preventDefault();
+        }
+      });
+      window.addEventListener('error', function(e) {
+        var msg = (e && (e.message || '')) || '';
+        if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
+          e.preventDefault();
+        }
+      });
+    </script>
+  </head>
+  <body class="bg-[#fbf7f0] text-[#292222]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
