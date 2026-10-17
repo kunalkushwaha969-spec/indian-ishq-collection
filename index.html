@@ -9,24 +9,57 @@
     <meta property="og:description" content="Production-ready ethnic wear e-commerce store with live cloud catalog, dynamic UPI QR code & COD checkout, merchant admin dashboard, and cloud image uploads." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- Early WebSocket silencer and unhandled rejection suppressor -->
+    <script>
+      (function() {
+        // Intercept and prevent unhandled WebSocket rejections in sandboxed preview environments
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && event.reason;
+          var msg = (reason && (reason.message || reason.stack || String(reason))) || '';
+          if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
+            event.preventDefault();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          var msg = (event && (event.message || '')) || '';
+          if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
+            event.preventDefault();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+          }
+        }, true);
+
+        // Stub WebSocket for vite-hmr protocol so it never closes in error
+        var NativeWS = window.WebSocket;
+        if (NativeWS) {
+          window.WebSocket = function(url, protocols) {
+            var isHmr = protocols === 'vite-hmr' || (typeof url === 'string' && (url.indexOf('vite-hmr') !== -1 || url.indexOf('24678') !== -1));
+            if (isHmr) {
+              var dummy = new EventTarget();
+              dummy.readyState = 1; // OPEN
+              dummy.send = function() {};
+              dummy.close = function() {};
+              setTimeout(function() {
+                dummy.dispatchEvent(new Event('open'));
+              }, 0);
+              return dummy;
+            }
+            return new NativeWS(url, protocols);
+          };
+          window.WebSocket.prototype = NativeWS.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+      })();
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-      // Prevent unhandled WebSocket rejections from breaking the UI in sandboxed environments
-      window.addEventListener('unhandledrejection', function(e) {
-        var reason = (e && e.reason && (e.reason.message || e.reason.toString())) || '';
-        if (typeof reason === 'string' && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('closed without opened') !== -1)) {
-          e.preventDefault();
-        }
-      });
-      window.addEventListener('error', function(e) {
-        var msg = (e && (e.message || '')) || '';
-        if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
-          e.preventDefault();
-        }
-      });
-    </script>
   </head>
   <body class="bg-[#fbf7f0] text-[#292222]">
     <div id="root"></div>
