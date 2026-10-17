@@ -1,6 +1,11 @@
 import type { Product, Order, CustomerDetails, OrderItem } from '../utils/ecommerce';
 import { initialProducts, initialOrders } from '../utils/ecommerce';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase';
+import {
+  getEffectiveSupabaseUrl,
+  getEffectiveSupabaseKey,
+  isPlaceholderSupabaseUrl,
+  saveCustomSupabaseCredentials,
+} from './supabase';
 import { addMerchantActivity } from './activity';
 
 const TOKEN_KEY = 'ishq_merchant_token';
@@ -18,6 +23,15 @@ export function setStoredToken(token: string | null) {
     localStorage.removeItem(TOKEN_KEY);
   }
 }
+
+// Detect static hosting environments (e.g. GitHub Pages) where /api/* backend routes do not exist
+const isStaticHost = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.location.hostname.endsWith('github.io') ||
+    window.location.protocol === 'file:'
+  );
+};
 
 // Local Storage Fallback Cache (Ensures 100% operation on static hosts like GitHub Pages)
 function getLocalProducts(): Product[] {
@@ -48,21 +62,23 @@ function setLocalOrders(ords: Order[]) {
   } catch {}
 }
 
-// Standard Supabase PostgREST REST headers (Pure HTTP, Zero WebSockets)
-const SUPABASE_REST = `${SUPABASE_URL}/rest/v1`;
+const getSupabaseRestUrl = () => `${getEffectiveSupabaseUrl()}/rest/v1`;
 
-const getSupabaseHeaders = () => ({
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  'Content-Type': 'application/json',
-  Prefer: 'return=representation',
-});
+const getSupabaseHeaders = () => {
+  const key = getEffectiveSupabaseKey();
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+};
 
 // Resilient HTTP fetch helper with timeout
 async function httpFetch(
   url: string,
   options: RequestInit = {},
-  timeoutMs = 1500
+  timeoutMs = 1800
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -77,58 +93,114 @@ async function httpFetch(
   }
 }
 
+/**
+ * Diagnostic test tool to verify Supabase project connectivity & schema tables
+ */
+export async function testSupabaseConnection(
+  url = getEffectiveSupabaseUrl(),
+  key = getEffectiveSupabaseKey()
+): Promise<{ ok: boolean; message: string; tableStatus: 'ready' | 'missing_tables' | 'unreachable' }> {
+  try {
+    const testUrl = `${url}/rest/v1/products?select=id&limit=1`;
+    const res = await httpFetch(testUrl, {
+      method: 'GET',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+    }, 2500);
+
+    if (res.ok) {
+      return {
+        ok: true,
+        message: 'Successfully connected to Supabase! Live database sync is active.',
+        tableStatus: 'ready',
+      };
+    }
+
+    if (res.status === 404 || res.status === 400) {
+      const body = await res.json().catch(() => ({}));
+      if (body.message?.includes('relation "public.products" does not exist')) {
+        return {
+          ok: true,
+          message: 'Connected to Supabase project, but "products" table is not created yet. Run the SQL schema to create tables.',
+          tableStatus: 'missing_tables',
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      message: `Supabase returned HTTP ${res.status}. Check API key or Project URL permissions.`,
+      tableStatus: 'unreachable',
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      message: `Connection failed (${err.message || 'DNS unresolvable'}). Check Project URL.`,
+      tableStatus: 'unreachable',
+    };
+  }
+}
+
 // 1. Fetch live products via standard REST/HTTP GET
 export async function fetchProducts(
   category = 'All',
   searchQuery = ''
 ): Promise<Product[]> {
-  // A. Attempt direct Supabase PostgREST HTTP GET
-  try {
-    const params = new URLSearchParams();
-    params.set('select', '*');
-    if (category && category !== 'All') {
-      params.set('category', `eq.${category}`);
-    }
-    if (searchQuery.trim()) {
-      params.set('name', `ilike.%${searchQuery.trim()}%`);
-    }
-    params.set('order', 'created_at.desc');
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
-    const res = await httpFetch(
-      `${SUPABASE_REST}/products?${params.toString()}`,
-      {
-        method: 'GET',
-        headers: getSupabaseHeaders(),
-      },
-      1500
-    );
-
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        setLocalProducts(data as Product[]);
-        return data as Product[];
+  // A. Attempt direct Supabase PostgREST HTTP GET if not unresolvable placeholder
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const params = new URLSearchParams();
+      params.set('select', '*');
+      if (category && category !== 'All') {
+        params.set('category', `eq.${category}`);
       }
+      if (searchQuery.trim()) {
+        params.set('name', `ilike.%${searchQuery.trim()}%`);
+      }
+      params.set('order', 'created_at.desc');
+
+      const res = await httpFetch(
+        `${getSupabaseRestUrl()}/products?${params.toString()}`,
+        {
+          method: 'GET',
+          headers: getSupabaseHeaders(),
+        },
+        1800
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setLocalProducts(data as Product[]);
+          return data as Product[];
+        }
+      }
+    } catch (err: any) {
+      console.info('[REST Data Service]: Supabase cloud HTTP notice (using fallback):', err.message || err);
     }
-  } catch (err: any) {
-    console.info('[REST Data Service]: Supabase cloud HTTP fetch notice (using fallback):', err.message || err);
   }
 
-  // B. Attempt Backend REST API (if running in full-stack Node environment)
-  try {
-    const backendParams = new URLSearchParams();
-    if (category && category !== 'All') backendParams.set('category', category);
-    if (searchQuery.trim()) backendParams.set('q', searchQuery.trim());
+  // B. Attempt Backend REST API only if NOT on a purely static host like GitHub Pages
+  if (!isStaticHost()) {
+    try {
+      const backendParams = new URLSearchParams();
+      if (category && category !== 'All') backendParams.set('category', category);
+      if (searchQuery.trim()) backendParams.set('q', searchQuery.trim());
 
-    const backendRes = await httpFetch(`/api/products?${backendParams.toString()}`, {}, 1200);
-    if (backendRes.ok) {
-      const result = await backendRes.json();
-      if (result.products && result.products.length > 0) {
-        setLocalProducts(result.products);
-        return result.products;
+      const backendRes = await httpFetch(`/api/products?${backendParams.toString()}`, {}, 1200);
+      if (backendRes.ok) {
+        const result = await backendRes.json();
+        if (result.products && result.products.length > 0) {
+          setLocalProducts(result.products);
+          return result.products;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   // C. Resilient Static / GitHub Pages fallback
   const localList = getLocalProducts();
@@ -172,31 +244,34 @@ export async function createProduct(
   };
 
   let createdProduct: Product | null = null;
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt direct Supabase PostgREST HTTP POST
-  try {
-    const res = await httpFetch(
-      `${SUPABASE_REST}/products`,
-      {
-        method: 'POST',
-        headers: getSupabaseHeaders(),
-        body: JSON.stringify([productRecord]),
-      },
-      1800
-    );
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const res = await httpFetch(
+        `${getSupabaseRestUrl()}/products`,
+        {
+          method: 'POST',
+          headers: getSupabaseHeaders(),
+          body: JSON.stringify([productRecord]),
+        },
+        2000
+      );
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        createdProduct = data[0] as Product;
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          createdProduct = data[0] as Product;
+        }
       }
+    } catch (err: any) {
+      console.info('[REST Data Service]: Direct cloud POST notice, saving via fallback:', err.message || err);
     }
-  } catch (err: any) {
-    console.info('[REST Data Service]: Direct cloud POST notice, saving via fallback:', err.message || err);
   }
 
-  // B. Attempt Backend REST API
-  if (!createdProduct) {
+  // B. Attempt Backend REST API only if not static host
+  if (!createdProduct && !isStaticHost()) {
     try {
       const token = getStoredToken();
       const backendRes = await httpFetch('/api/products', {
@@ -239,31 +314,34 @@ export async function updateProductStock(
   stock: number
 ): Promise<Product> {
   let updatedProduct: Product | null = null;
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP PATCH
-  try {
-    const res = await httpFetch(
-      `${SUPABASE_REST}/products?id=eq.${id}`,
-      {
-        method: 'PATCH',
-        headers: getSupabaseHeaders(),
-        body: JSON.stringify({ stock }),
-      },
-      1500
-    );
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const res = await httpFetch(
+        `${getSupabaseRestUrl()}/products?id=eq.${id}`,
+        {
+          method: 'PATCH',
+          headers: getSupabaseHeaders(),
+          body: JSON.stringify({ stock }),
+        },
+        1800
+      );
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        updatedProduct = data[0] as Product;
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          updatedProduct = data[0] as Product;
+        }
       }
+    } catch (err: any) {
+      console.info('[REST Data Service]: Cloud PATCH notice, updating via fallback:', err.message || err);
     }
-  } catch (err: any) {
-    console.info('[REST Data Service]: Cloud PATCH notice, updating via fallback:', err.message || err);
   }
 
-  // B. Attempt Backend REST API
-  if (!updatedProduct) {
+  // B. Attempt Backend REST API only if not static host
+  if (!updatedProduct && !isStaticHost()) {
     try {
       const token = getStoredToken();
       const backendRes = await httpFetch(`/api/products/${id}/stock`, {
@@ -311,26 +389,32 @@ export async function updateProductStock(
 
 // 4. Delete product via standard REST/HTTP DELETE
 export async function deleteProduct(id: string): Promise<void> {
-  // A. Attempt Supabase PostgREST HTTP DELETE
-  try {
-    await httpFetch(
-      `${SUPABASE_REST}/products?id=eq.${id}`,
-      {
-        method: 'DELETE',
-        headers: getSupabaseHeaders(),
-      },
-      1500
-    );
-  } catch {}
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
-  // B. Attempt Backend REST API
-  try {
-    const token = getStoredToken();
-    await httpFetch(`/api/products/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    }, 1500);
-  } catch {}
+  // A. Attempt Supabase PostgREST HTTP DELETE
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      await httpFetch(
+        `${getSupabaseRestUrl()}/products?id=eq.${id}`,
+        {
+          method: 'DELETE',
+          headers: getSupabaseHeaders(),
+        },
+        1500
+      );
+    } catch {}
+  }
+
+  // B. Attempt Backend REST API only if not static host
+  if (!isStaticHost()) {
+    try {
+      const token = getStoredToken();
+      await httpFetch(`/api/products/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }, 1500);
+    } catch {}
+  }
 
   // C. Local storage update
   const existing = getLocalProducts();
@@ -366,31 +450,34 @@ export async function createOrder(payload: {
   };
 
   let placedOrder: Order | null = null;
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP POST
-  try {
-    const res = await httpFetch(
-      `${SUPABASE_REST}/orders`,
-      {
-        method: 'POST',
-        headers: getSupabaseHeaders(),
-        body: JSON.stringify([orderRecord]),
-      },
-      1800
-    );
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const res = await httpFetch(
+        `${getSupabaseRestUrl()}/orders`,
+        {
+          method: 'POST',
+          headers: getSupabaseHeaders(),
+          body: JSON.stringify([orderRecord]),
+        },
+        2000
+      );
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        placedOrder = data[0] as Order;
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          placedOrder = data[0] as Order;
+        }
       }
+    } catch (err: any) {
+      console.info('[REST Data Service]: Cloud order POST notice, saving via fallback:', err.message || err);
     }
-  } catch (err: any) {
-    console.info('[REST Data Service]: Cloud order POST notice, saving via fallback:', err.message || err);
   }
 
-  // B. Attempt Backend REST API
-  if (!placedOrder) {
+  // B. Attempt Backend REST API only if not static host
+  if (!placedOrder && !isStaticHost()) {
     try {
       const backendRes = await httpFetch('/api/orders', {
         method: 'POST',
@@ -405,7 +492,7 @@ export async function createOrder(payload: {
     } catch {}
   }
 
-  // C. Fallback: Save to Local Storage Cache (Guarantees zero failed checkouts on GitHub Pages)
+  // C. Fallback: Save to Local Storage Cache
   if (!placedOrder) {
     placedOrder = orderRecord;
   }
@@ -434,43 +521,49 @@ export async function createOrder(payload: {
 
 // 6. Fetch Orders via standard REST/HTTP GET
 export async function fetchOrders(): Promise<Order[]> {
-  // A. Attempt Supabase PostgREST HTTP GET
-  try {
-    const res = await httpFetch(
-      `${SUPABASE_REST}/orders?select=*&order=created_at.desc`,
-      {
-        method: 'GET',
-        headers: getSupabaseHeaders(),
-      },
-      1500
-    );
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        setLocalOrders(data as Order[]);
-        return data as Order[];
+  // A. Attempt Supabase PostgREST HTTP GET
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const res = await httpFetch(
+        `${getSupabaseRestUrl()}/orders?select=*&order=created_at.desc`,
+        {
+          method: 'GET',
+          headers: getSupabaseHeaders(),
+        },
+        1800
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setLocalOrders(data as Order[]);
+          return data as Order[];
+        }
       }
+    } catch (err: any) {
+      console.info('[REST Data Service]: Cloud orders GET notice, fetching via fallback:', err.message || err);
     }
-  } catch (err: any) {
-    console.info('[REST Data Service]: Cloud orders GET notice, fetching via fallback:', err.message || err);
   }
 
-  // B. Attempt Backend REST API
-  try {
-    const token = getStoredToken();
-    const backendRes = await httpFetch('/api/orders', {
-      headers: { Authorization: `Bearer ${token}` },
-    }, 1200);
+  // B. Attempt Backend REST API only if not static host
+  if (!isStaticHost()) {
+    try {
+      const token = getStoredToken();
+      const backendRes = await httpFetch('/api/orders', {
+        headers: { Authorization: `Bearer ${token}` },
+      }, 1200);
 
-    if (backendRes.ok) {
-      const data = await backendRes.json();
-      if (data.orders && data.orders.length > 0) {
-        setLocalOrders(data.orders);
-        return data.orders;
+      if (backendRes.ok) {
+        const data = await backendRes.json();
+        if (data.orders && data.orders.length > 0) {
+          setLocalOrders(data.orders);
+          return data.orders;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   // C. Fallback to Local Storage Cache
   return getLocalOrders();
@@ -482,29 +575,32 @@ export async function updateOrderStatus(
   status: Order['status']
 ): Promise<Order> {
   let updatedOrder: Order | null = null;
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP PATCH
-  try {
-    const res = await httpFetch(
-      `${SUPABASE_REST}/orders?id=eq.${orderId}`,
-      {
-        method: 'PATCH',
-        headers: getSupabaseHeaders(),
-        body: JSON.stringify({ status }),
-      },
-      1500
-    );
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const res = await httpFetch(
+        `${getSupabaseRestUrl()}/orders?id=eq.${orderId}`,
+        {
+          method: 'PATCH',
+          headers: getSupabaseHeaders(),
+          body: JSON.stringify({ status }),
+        },
+        1800
+      );
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        updatedOrder = data[0] as Order;
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          updatedOrder = data[0] as Order;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
-  // B. Attempt Backend REST API
-  if (!updatedOrder) {
+  // B. Attempt Backend REST API only if not static host
+  if (!updatedOrder && !isStaticHost()) {
     try {
       const token = getStoredToken();
       const backendRes = await httpFetch(`/api/orders/${orderId}/status`, {
@@ -603,17 +699,19 @@ export async function generateUpiQrCode(params: {
   payeeName?: string;
   vpa?: string;
 }): Promise<{ upiUri: string; qrDataUrl: string; vpa: string }> {
-  try {
-    const res = await httpFetch('/api/upi/qr', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    }, 1500);
+  if (!isStaticHost()) {
+    try {
+      const res = await httpFetch('/api/upi/qr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      }, 1500);
 
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch {}
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+  }
 
   // Client-side fallback generation (works statically on GitHub Pages)
   const QRCode = (await import('qrcode')).default;
@@ -658,46 +756,52 @@ export async function uploadImageDirect(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 
-  // A. Attempt standard HTTP REST upload to Supabase Storage endpoint
-  try {
-    const storageUrl = `${SUPABASE_URL}/storage/v1/object/product-images/${filePath}`;
-    const res = await httpFetch(storageUrl, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': file.type || 'image/jpeg',
-      },
-      body: file,
-    }, 2500);
+  const supabaseUrl = getEffectiveSupabaseUrl();
 
-    if (res.ok) {
-      return `${SUPABASE_URL}/storage/v1/object/public/product-images/${filePath}`;
+  // A. Attempt standard HTTP REST upload to Supabase Storage endpoint
+  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+    try {
+      const storageUrl = `${supabaseUrl}/storage/v1/object/product-images/${filePath}`;
+      const res = await httpFetch(storageUrl, {
+        method: 'POST',
+        headers: {
+          apikey: getEffectiveSupabaseKey(),
+          Authorization: `Bearer ${getEffectiveSupabaseKey()}`,
+          'Content-Type': file.type || 'image/jpeg',
+        },
+        body: file,
+      }, 2500);
+
+      if (res.ok) {
+        return `${supabaseUrl}/storage/v1/object/public/product-images/${filePath}`;
+      }
+    } catch (err: any) {
+      console.info('[REST Data Service]: Storage cloud HTTP upload notice:', err.message || err);
     }
-  } catch (err: any) {
-    console.info('[REST Data Service]: Storage cloud HTTP upload notice:', err.message || err);
   }
 
   // B. Attempt Backend REST /api/upload
-  try {
-    const token = getStoredToken();
-    const res = await httpFetch('/api/upload', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        base64Data,
-        filename: file.name,
-      }),
-    }, 2000);
+  if (!isStaticHost()) {
+    try {
+      const token = getStoredToken();
+      const res = await httpFetch('/api/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          base64Data,
+          filename: file.name,
+        }),
+      }, 2000);
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.url) return data.url;
-    }
-  } catch {}
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) return data.url;
+      }
+    } catch {}
+  }
 
   // C. Return clean inline Data URL (100% reliable for client preview & GitHub Pages)
   return base64Data;

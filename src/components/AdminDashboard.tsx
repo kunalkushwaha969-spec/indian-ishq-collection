@@ -11,7 +11,14 @@ import {
   verifyAdminSession,
   getStoredToken,
   setStoredToken,
+  testSupabaseConnection,
 } from '../services/api';
+import {
+  getEffectiveSupabaseUrl,
+  getEffectiveSupabaseKey,
+  saveCustomSupabaseCredentials,
+  isPlaceholderSupabaseUrl,
+} from '../services/supabase';
 import {
   type MerchantActivity,
   getMerchantActivities,
@@ -39,6 +46,8 @@ import {
   CheckCheck,
   Tag,
   Filter,
+  Link as LinkIcon,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -75,6 +84,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [unreadCount, setUnreadCount] = useState<number>(() => getUnreadActivityCount());
   const [activityFilter, setActivityFilter] = useState<'all' | 'order' | 'inventory' | 'status'>('all');
 
+  // Live Supabase connection management
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState<string>(() => {
+    const url = getEffectiveSupabaseUrl();
+    return isPlaceholderSupabaseUrl(url) ? '' : url;
+  });
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState<string>(() => {
+    const url = getEffectiveSupabaseUrl();
+    return isPlaceholderSupabaseUrl(url) ? '' : getEffectiveSupabaseKey();
+  });
+  const [isTestingConn, setIsTestingConn] = useState<boolean>(false);
+  const [connFeedback, setConnFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const [activeDbUrl, setActiveDbUrl] = useState<string>(() => getEffectiveSupabaseUrl());
+
   // Synchronize activity log in real-time
   useEffect(() => {
     const updateActivities = () => {
@@ -83,6 +105,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
     window.addEventListener('ishq:activity-updated', updateActivities);
     return () => window.removeEventListener('ishq:activity-updated', updateActivities);
+  }, []);
+
+  // Listen to custom credentials updates
+  useEffect(() => {
+    const handleCredUpdate = () => {
+      setActiveDbUrl(getEffectiveSupabaseUrl());
+    };
+    window.addEventListener('ishq:supabase-config-updated', handleCredUpdate);
+    return () => window.removeEventListener('ishq:supabase-config-updated', handleCredUpdate);
   }, []);
 
   // Check auth session on open
@@ -190,6 +221,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setBanner(null), 2500);
   };
 
+  const handleTestAndSaveSupabase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setConnFeedback(null);
+    setIsTestingConn(true);
+
+    const cleanUrl = supabaseUrlInput.trim().replace(/\/+$/, '');
+    const cleanKey = supabaseKeyInput.trim();
+
+    if (!cleanUrl.startsWith('http')) {
+      setConnFeedback({
+        ok: false,
+        message: 'Invalid Project URL. Must start with https:// (e.g. https://xyz.supabase.co)',
+      });
+      setIsTestingConn(false);
+      return;
+    }
+
+    if (cleanKey.length < 20) {
+      setConnFeedback({
+        ok: false,
+        message: 'Invalid API Key. Please paste your public anon key from Supabase.',
+      });
+      setIsTestingConn(false);
+      return;
+    }
+
+    const res = await testSupabaseConnection(cleanUrl, cleanKey);
+    setConnFeedback(res);
+    setIsTestingConn(false);
+
+    if (res.ok) {
+      saveCustomSupabaseCredentials(cleanUrl, cleanKey);
+      setActiveDbUrl(cleanUrl);
+      loadData();
+      onCatalogChanged();
+      setBanner({
+        type: 'success',
+        message: 'Connected to your Supabase project! Live database sync is now active.',
+      });
+    }
+  };
+
   if (!isOpen) return null;
 
   const totalRevenue = orders.reduce((sum, o) => sum + (o.status !== 'Cancelled' ? o.total : 0), 0);
@@ -198,6 +271,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (activityFilter === 'all') return true;
     return a.type === activityFilter;
   });
+  const hasPlaceholderDb = isPlaceholderSupabaseUrl(activeDbUrl);
 
   return (
     <div
@@ -221,6 +295,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {isAuthenticated && (
                   <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
                     Live Session Active
+                  </span>
+                )}
+                {hasPlaceholderDb ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('cloud')}
+                    className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Demo Fallback Mode</span>
+                    <span>(Connect DB)</span>
+                  </button>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Supabase Live</span>
                   </span>
                 )}
               </div>
@@ -348,6 +437,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ) : (
             /* AUTHENTICATED MERCHANT DASHBOARD */
             <div className="p-4 sm:p-6 space-y-6">
+              {/* Notice Banner if running on demo fallback without real Supabase connection */}
+              {hasPlaceholderDb && (
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start sm:items-center justify-between gap-3 text-xs text-amber-900">
+                  <div className="flex items-center gap-2.5">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <strong className="font-semibold block sm:inline">Database Notice: </strong>
+                      <span>
+                        Running on local resilient cache. To synchronize real-time product edits and customer orders with your live Supabase project, link your Project URL in Cloud Architecture.
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('cloud')}
+                    className="shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                  >
+                    Connect Supabase
+                  </button>
+                </div>
+              )}
+
               {/* Inline Notification Banner */}
               {banner && (
                 <div
@@ -436,7 +547,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     label: 'Activity & Notifications',
                     badge: unreadCount,
                   },
-                  { id: 'cloud', label: 'Cloud Architecture' },
+                  { id: 'cloud', label: 'Cloud Architecture & Sync' },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -595,7 +706,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div>
                       <h3 className="font-serif text-xl text-[#70283b]">Products & Stock Management</h3>
                       <p className="text-xs text-[#776c6b]">
-                        Live cloud database catalog. Edit stock directly or add items with cloud images.
+                        Live catalog manager. Edit stock counts directly or add items with photos.
                       </p>
                     </div>
                     <button
@@ -921,56 +1032,157 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
 
-              {/* TAB 5: CLOUD ARCHITECTURE */}
+              {/* TAB 5: CLOUD ARCHITECTURE & SUPABASE CONNECTION */}
               {activeTab === 'cloud' && (
-                <div className="bg-white p-6 rounded-xl border border-[#eadfda] space-y-4">
-                  <div className="flex items-center gap-3">
-                    <Database className="w-8 h-8 text-[#70283b]" />
-                    <div>
-                      <h4 className="font-serif text-lg text-[#292222]">
-                        Production Cloud Database Architecture
-                      </h4>
-                      <p className="text-xs text-[#776c6b]">
-                        Active connected backend: Serverless REST APIs with Supabase & Firebase schema parity.
-                      </p>
+                <div className="space-y-6">
+                  {/* LIVE SUPABASE PROJECT LINKER */}
+                  <div className="bg-white p-6 rounded-xl border border-[#b78a4b]/40 shadow-xs space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#eadfda] pb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-[#fcf9f5] border border-[#b78a4b]/30 rounded-xl text-[#70283b]">
+                          <Database className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h4 className="font-serif text-lg text-[#292222]">
+                            Supabase Cloud Connection Settings
+                          </h4>
+                          <p className="text-xs text-[#776c6b]">
+                            Link your live Supabase project to synchronize orders and catalog modifications instantly.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {hasPlaceholderDb ? (
+                          <span className="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-semibold flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-500" />
+                            <span>Demo Local Cache</span>
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-full text-xs font-semibold flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>Connected to Live Cloud</span>
+                          </span>
+                        )}
+                      </div>
                     </div>
+
+                    {connFeedback && (
+                      <div
+                        className={`p-3.5 rounded-lg text-xs flex items-center gap-2 border ${
+                          connFeedback.ok
+                            ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                            : 'bg-red-50 text-red-900 border-red-200'
+                        }`}
+                      >
+                        {connFeedback.ok ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                        )}
+                        <span>{connFeedback.message}</span>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleTestAndSaveSupabase} className="space-y-4 pt-1">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+                          Supabase Project URL *
+                        </label>
+                        <input
+                          type="url"
+                          required
+                          placeholder="https://your-project-id.supabase.co"
+                          value={supabaseUrlInput}
+                          onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                          className="w-full p-2.5 bg-[#fcf9f5] border border-[#eadfda] rounded-lg text-xs text-[#292222] font-mono focus:outline-[#b78a4b]"
+                        />
+                        <span className="text-[11px] text-[#776c6b] mt-1 block">
+                          Found in Supabase: <strong>Project Settings ➔ Configuration ➔ API ➔ Project URL</strong>
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+                          Supabase Public Anon Key *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                          value={supabaseKeyInput}
+                          onChange={(e) => setSupabaseKeyInput(e.target.value)}
+                          className="w-full p-2.5 bg-[#fcf9f5] border border-[#eadfda] rounded-lg text-xs text-[#292222] font-mono focus:outline-[#b78a4b]"
+                        />
+                        <span className="text-[11px] text-[#776c6b] mt-1 block">
+                          Found in Supabase: <strong>Project Settings ➔ Configuration ➔ API ➔ Project API keys ➔ `anon public`</strong>
+                        </span>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
+                        <button
+                          type="submit"
+                          disabled={isTestingConn}
+                          className="px-5 py-2.5 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          <LinkIcon className="w-3.5 h-3.5" />
+                          <span>{isTestingConn ? 'Verifying Cloud Connection...' : 'Verify & Connect Live Database'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={onOpenCloudDocs}
+                          className="text-xs text-[#70283b] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Database className="w-3.5 h-3.5" />
+                          <span>View SQL Schema Scripts</span>
+                        </button>
+                      </div>
+                    </form>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                    <div className="p-4 bg-[#fcf9f5] border border-[#eadfda] rounded-xl">
-                      <strong className="block text-xs font-bold text-[#70283b] uppercase mb-1">
-                        Table 1: Products
-                      </strong>
-                      <p className="text-[11px] text-[#776c6b] mb-2">
-                        Fields: <code className="text-[#292222]">id, name, category, price, stock, image_url, tag, created_at</code>
-                      </p>
-                      <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
-                        Public Read · Merchant Write (RLS Protected)
-                      </span>
+                  {/* Database Architecture Details */}
+                  <div className="bg-white p-6 rounded-xl border border-[#eadfda] space-y-4">
+                    <h4 className="font-serif text-lg text-[#292222]">
+                      Database Architecture & Table Schemas
+                    </h4>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="p-4 bg-[#fcf9f5] border border-[#eadfda] rounded-xl">
+                        <strong className="block text-xs font-bold text-[#70283b] uppercase mb-1">
+                          Table 1: Products
+                        </strong>
+                        <p className="text-[11px] text-[#776c6b] mb-2">
+                          Fields: <code className="text-[#292222]">id, name, category, price, stock, image_url, tag, created_at</code>
+                        </p>
+                        <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
+                          Public Read · Merchant Write (RLS Protected)
+                        </span>
+                      </div>
+
+                      <div className="p-4 bg-[#fcf9f5] border border-[#eadfda] rounded-xl">
+                        <strong className="block text-xs font-bold text-[#70283b] uppercase mb-1">
+                          Table 2: Orders
+                        </strong>
+                        <p className="text-[11px] text-[#776c6b] mb-2">
+                          Fields: <code className="text-[#292222]">id, customer_details, items, payment_method, upi_ref_id, status, total</code>
+                        </p>
+                        <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
+                          Public Create · Merchant Read/Update (RLS Protected)
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="p-4 bg-[#fcf9f5] border border-[#eadfda] rounded-xl">
-                      <strong className="block text-xs font-bold text-[#70283b] uppercase mb-1">
-                        Table 2: Orders
-                      </strong>
-                      <p className="text-[11px] text-[#776c6b] mb-2">
-                        Fields: <code className="text-[#292222]">id, customer_details, items, payment_method, upi_ref_id, status, total</code>
-                      </p>
-                      <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
-                        Public Create · Merchant Read/Update (RLS Protected)
-                      </span>
+                    <div className="pt-2 flex gap-3">
+                      <button
+                        type="button"
+                        onClick={onOpenCloudDocs}
+                        className="px-4 py-2 bg-[#70283b] text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Open SQL & JavaScript Code Blueprints</span>
+                      </button>
                     </div>
-                  </div>
-
-                  <div className="pt-3 flex gap-3">
-                    <button
-                      type="button"
-                      onClick={onOpenCloudDocs}
-                      className="px-4 py-2 bg-[#70283b] text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Open Full SQL & JavaScript Code Blueprints</span>
-                    </button>
                   </div>
                 </div>
               )}
