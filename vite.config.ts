@@ -16,6 +16,6 @@ export default defineConfig(({ command }) => {
     server: {
       hmr: false,
       watch: null,
-    },
+     },
   };
 });
