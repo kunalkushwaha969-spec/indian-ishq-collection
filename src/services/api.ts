@@ -433,20 +433,44 @@ export async function loginAdmin(
   password: string,
   email?: string
 ): Promise<{ token: string; user: { email: string; role: string } }> {
-  if (password === 'ishq2026') {
+  const normalizedEmail = (email || 'admin@indianishq.com')
+    .trim()
+    .toLowerCase();
+
+  if (
+    password === 'ishq2026' &&
+    normalizedEmail === 'admin@indianishq.com'
+  ) {
     const demoToken = 'ishq_static_admin_token_' + Date.now();
+
     setStoredToken(demoToken);
+
     return {
       token: demoToken,
-      user: { email: email || 'admin@indianishq.com', role: 'admin' },
+      user: {
+        email: normalizedEmail,
+        role: 'admin',
+      },
     };
   }
+
   throw new Error('Invalid merchant credentials');
 }
 
-export async function verifyAdminSession(token = getStoredToken()): Promise<boolean> {
+export async function verifyAdminSession(
+  token = getStoredToken()
+): Promise<boolean> {
   if (!token) return false;
-  return token.startsWith('ishq_static_admin_token_');
+
+  const isValidFormat =
+    /^ishq_static_admin_token_\d+$/.test(token);
+
+  if (!isValidFormat) {
+    setStoredToken(null);
+    return false;
+  }
+
+  return true;
 }
 
 export async function generateUpiQrCode(params: {
