@@ -90,23 +90,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, []);
 
   // Check auth session on open
-  useEffect(() => {
-    if (isOpen) {
-      const checkAuth = async () => {
-        setIsCheckingAuth(true);
-       const valid = await verifyAdminSession();
+ // Check merchant authentication when dashboard opens
+useEffect(() => {
+  if (!isOpen) return;
 
-setIsAuthenticated(valid);
-onAuthChange(valid);
-setIsCheckingAuth(false);
+  let cancelled = false;
 
-if (valid) {
-  loadData();
-}
-      };
-      checkAuth();
+  const checkAuth = async () => {
+    setIsCheckingAuth(true);
+
+    try {
+      const valid = await verifyAdminSession();
+
+      if (cancelled) return;
+
+      setIsAuthenticated(valid);
+      onAuthChange(valid);
+
+      if (valid) {
+        await loadData();
+      } else {
+        setStoredToken(null);
+      }
+    } catch (error) {
+      if (cancelled) return;
+
+      console.error('Merchant session verification failed:', error);
+
+      setIsAuthenticated(false);
+      setStoredToken(null);
+      onAuthChange(false);
+    } finally {
+      if (!cancelled) {
+        setIsCheckingAuth(false);
+      }
     }
-  }, [isOpen]);
+  };
+
+  checkAuth();
+
+  return () => {
+    cancelled = true;
+  };
+}, [isOpen, onAuthChange]);
 
   // Real-time synchronization across devices (updates instantly when modified on phone or laptop)
   useEffect(() => {
