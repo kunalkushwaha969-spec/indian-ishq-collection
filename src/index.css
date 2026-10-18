@@ -21,3 +21,23 @@
     font-family: 'Playfair Display', Georgia, serif;
   }
 }
+/* --- Mobile View & Layout Responsiveness Fixes --- */
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  object-fit: cover;
+}
+
+@media (max-width: 768px) {
+  /* Center footer and text elements so they don't stick to the left edge */
+  footer, .store-footer, .footer-content {
+    text-align: center !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+}
