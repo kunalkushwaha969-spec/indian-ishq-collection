@@ -63,9 +63,10 @@ export default function App() {
   });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
 
-  const [isMerchantAuthenticated, setIsMerchantAuthenticated] =
+const [isMerchantAuthenticated, setIsMerchantAuthenticated] =
   useState<boolean>(() => !!getStoredToken());
-  const handleMerchantAuthChange = useCallback(
+
+const handleMerchantAuthChange = useCallback(
   (authenticated: boolean) => {
     setIsMerchantAuthenticated(authenticated);
   },
@@ -485,15 +486,16 @@ useEffect(() => {
       />
 
       <AdminDashboard
-        isOpen={isAdminOpen}
-        onClose={() => {
-          setIsAdminOpen(false);
-          if (window.location.hash === '#admin') {
-            window.history.pushState(null, '', window.location.pathname);
-          }
-        }}
-        onCatalogChanged={loadLiveProducts}
-      />
+  isOpen={isAdminOpen}
+  onClose={() => {
+    setIsAdminOpen(false);
+    if (window.location.hash === '#admin') {
+      window.history.pushState(null, '', window.location.pathname);
+    }
+  }}
+  onCatalogChanged={loadLiveProducts}
+  onAuthChange={handleMerchantAuthChange}
+/>
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </>
