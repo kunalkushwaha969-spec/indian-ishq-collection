@@ -65,6 +65,12 @@ export default function App() {
 
   const [isMerchantAuthenticated, setIsMerchantAuthenticated] =
   useState<boolean>(() => !!getStoredToken());
+  const handleMerchantAuthChange = useCallback(
+  (authenticated: boolean) => {
+    setIsMerchantAuthenticated(authenticated);
+  },
+  []
+);
 
 useEffect(() => {
   const checkAuth = () => {
