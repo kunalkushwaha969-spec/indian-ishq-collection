@@ -47,7 +47,6 @@ export default function App() {
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Cart stored in localStorage
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
       const saved = localStorage.getItem('ishq_cart');
@@ -64,7 +63,6 @@ export default function App() {
   });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
 
-  // Check if current user is an authenticated Merchant
   const [isMerchantAuthenticated, setIsMerchantAuthenticated] = useState<boolean>(() => {
     return !!getStoredToken() || window.location.hash === '#admin';
   });
@@ -73,7 +71,6 @@ export default function App() {
     setIsMerchantAuthenticated(!!getStoredToken() || isAdminOpen);
   }, [isAdminOpen, isCustomizerOpen]);
 
-  // Store Theme (Accessible to all users)
   const [theme, setTheme] = useState<StoreTheme>(() => {
     try {
       const saved = localStorage.getItem('ishq_theme');
@@ -83,7 +80,6 @@ export default function App() {
     }
   });
 
-  // Custom Cover Photo (Editable ONLY by Merchant)
   const [coverPhoto, setCoverPhoto] = useState<string>(() => {
     try {
       return localStorage.getItem('ishq_cover_photo') || '';
@@ -92,12 +88,10 @@ export default function App() {
     }
   });
 
-  // Live Order Notification state for Merchant
   const [unreadOrdersCount, setUnreadOrdersCount] = useState<number>(0);
   const knownOrderIdsRef = useRef<Set<string>>(new Set());
   const initialOrdersLoadedRef = useRef<boolean>(false);
 
-  // In-app Notification / Toast state
   const [toast, setToast] = useState<ToastData | null>(null);
 
   const showToast = useCallback((data: ToastData | string) => {
@@ -108,7 +102,6 @@ export default function App() {
     }
   }, []);
 
-  // Notification sound for new incoming orders
   const playOrderChime = useCallback(() => {
     try {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -127,7 +120,6 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Apply Color Palette to CSS variables
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--wine', theme.wine);
@@ -140,7 +132,6 @@ export default function App() {
     } catch {}
   }, [theme]);
 
-  // Apply Merchant's Cover Photo to the Hero section image
   useEffect(() => {
     if (!coverPhoto) return;
     try {
@@ -156,7 +147,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [coverPhoto, products, isAdminOpen]);
 
-  // Real-time Firestore Orders Listener for Merchant Notifications
   useEffect(() => {
     const unsubscribeOrders = subscribeToFirestoreOrders((liveOrders) => {
       if (!initialOrdersLoadedRef.current) {
@@ -171,7 +161,7 @@ export default function App() {
         setUnreadOrdersCount((prev) => prev + brandNewOrders.length);
         playOrderChime();
 
-        if ( getStoredToken() || isAdminOpen ) {
+        if (getStoredToken() || isAdminOpen) {
           const latest = brandNewOrders[0];
           showToast({
             type: 'order',
@@ -190,7 +180,6 @@ export default function App() {
     return () => unsubscribeOrders();
   }, [isAdminOpen, playOrderChime, showToast]);
 
-  // Auto-dismiss toast after 3.8s
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => {
@@ -199,7 +188,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Listen for hash changes
   useEffect(() => {
     const handleHashChange = () => {
       if (window.location.hash === '#admin') {
@@ -210,14 +198,12 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // Save cart changes
   useEffect(() => {
     try {
       localStorage.setItem('ishq_cart', JSON.stringify(cart));
     } catch {}
   }, [cart]);
 
-  // Dynamic live catalog fetching & real-time cloud synchronization
   const loadLiveProducts = useCallback(async () => {
     try {
       const live = await fetchProducts(activeCategory, searchQuery);
@@ -253,7 +239,6 @@ export default function App() {
     return () => unsubscribe();
   }, [activeCategory, searchQuery, loadLiveProducts]);
 
-  // Upload Cover Photo (Merchant Only)
   const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -271,14 +256,9 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // Cart operations
   const handleAddToCart = (product: Product) => {
     if (product.stock <= 0) {
-      showToast({
-        type: 'error',
-        title: 'Sold Out',
-        message: `"${product.name}" is currently out of stock.`,
-      });
+      showToast({ type: 'error', title: 'Sold Out', message: `"${product.name}" is out of stock.` });
       return;
     }
 
@@ -286,35 +266,12 @@ export default function App() {
       const existing = prev.find((item) => item.id === product.id);
       if (existing) {
         if (existing.qty >= product.stock) {
-          showToast({
-            type: 'error',
-            title: 'Stock Limit Reached',
-            message: `Only ${product.stock} pieces of "${product.name}" are currently available in inventory.`,
-          });
+          showToast({ type: 'error', title: 'Stock Limit Reached', message: `Only ${product.stock} available.` });
           return prev;
         }
-
-        showToast({
-          type: 'cart',
-          title: 'Bag Quantity Updated',
-          message: `Increased quantity of "${product.name}" to ${existing.qty + 1}.`,
-          actionLabel: 'Open Bag',
-          onAction: () => setIsCartOpen(true),
-        });
-
-        return prev.map((item) =>
-          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
-        );
+        return prev.map((item) => (item.id === product.id ? { ...item, qty: item.qty + 1 } : item));
       }
-
-      showToast({
-        type: 'cart',
-        title: 'Added to Bag ✨',
-        message: `"${product.name}" is now in your shopping bag.`,
-        actionLabel: 'View Bag',
-        onAction: () => setIsCartOpen(true),
-      });
-
+      showToast({ type: 'cart', title: 'Added to Bag ✨', message: `"${product.name}" added to bag.` });
       return [...prev, { id: product.id, qty: 1 }];
     });
   };
@@ -324,40 +281,17 @@ export default function App() {
     setCart((prev) => {
       const existing = prev.find((i) => i.id === productId);
       if (!existing) return prev;
-
-      if (delta > 0 && product && existing.qty >= product.stock) {
-        showToast({
-          type: 'error',
-          title: 'Stock Limit',
-          message: `Cannot add more. Available stock is ${product.stock}.`,
-        });
-        return prev;
-      }
-
+      if (delta > 0 && product && existing.qty >= product.stock) return prev;
       const newQty = existing.qty + delta;
-      if (newQty <= 0) {
-        showToast({
-          type: 'info',
-          title: 'Removed from Bag',
-          message: product ? `"${product.name}" was removed from your bag.` : 'Item removed.',
-        });
-        return prev.filter((i) => i.id !== productId);
-      }
+      if (newQty <= 0) return prev.filter((i) => i.id !== productId);
       return prev.map((i) => (i.id === productId ? { ...i, qty: newQty } : i));
     });
   };
 
   const handleRemoveItem = (productId: string) => {
-    const product = products.find((p) => p.id === productId);
     setCart((prev) => prev.filter((i) => i.id !== productId));
-    showToast({
-      type: 'info',
-      title: 'Item Removed',
-      message: product ? `"${product.name}" was removed from your bag.` : 'Item removed.',
-    });
   };
 
-  // Instant order confirmation alert
   const handleOrderSuccess = (order: Order) => {
     setCart([]);
     loadLiveProducts();
@@ -368,7 +302,7 @@ export default function App() {
     showToast({
       type: 'order',
       title: 'Order Confirmed! 🎉',
-      message: `Order #${order.id} (₹${order.total.toLocaleString('en-IN')}) placed successfully for ${order.customer_details.name}. Preparing your handcrafted outfit!`,
+      message: `Order #${order.id} (₹${order.total.toLocaleString('en-IN')}) placed successfully.`,
       actionLabel: 'Merchant Workspace',
       onAction: () => {
         setIsAdminOpen(true);
@@ -391,13 +325,7 @@ export default function App() {
         onCategoryChange={setActiveCategory}
         onSearchChange={setSearchQuery}
         onAddToCart={handleAddToCart}
-        onWishlistClick={(prod) => {
-          showToast({
-            type: 'info',
-            title: 'Saved to Wishlist',
-            message: `"${prod.name}" saved to your wishlist.`,
-          });
-        }}
+        onWishlistClick={(prod) => showToast(`Saved "${prod.name}" to wishlist`)}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenMerchant={() => {
           setIsAdminOpen(true);
@@ -406,7 +334,6 @@ export default function App() {
         onRetryFetch={loadLiveProducts}
       />
 
-      {/* Floating Action Bar: Theme Palette for ALL users + Order Alerts for Merchant */}
       <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2.5 items-end">
         {unreadOrdersCount > 0 && isMerchantAuthenticated && (
           <button
@@ -417,7 +344,7 @@ export default function App() {
             className="bg-red-600 text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 animate-bounce"
           >
             <span>🔔 {unreadOrdersCount} New Order{unreadOrdersCount > 1 ? 's' : ''}!</span>
-            <span className="underline text-xs">View in Admin</span>
+            <span className="underline text-xs">View</span>
           </button>
         )}
 
@@ -430,7 +357,6 @@ export default function App() {
         </button>
       </div>
 
-      {/* Theme Palette (All Users) & Cover Photo Uploader (Merchant Only) */}
       {isCustomizerOpen && (
         <div className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -446,7 +372,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Cover Photo Upload: ONLY visible to Authenticated Merchant */}
             {isMerchantAuthenticated && (
               <div className="mb-6 p-3.5 bg-pink-50/60 border border-pink-200 rounded-xl">
                 <div className="flex items-center justify-between mb-2">
@@ -488,7 +413,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Color Palette Presets (Accessible to Everyone) */}
             <div className="mb-6">
               <label className="block text-sm font-semibold text-gray-800 mb-2">
                 Select Color Palette
@@ -513,42 +437,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Custom Color Pickers (Accessible to Everyone) */}
-            <div className="mb-6">
-              <label className="block text-sm font-semibold text-gray-800 mb-2">
-                Custom Colors
-              </label>
-              <div className="grid grid-cols-3 gap-3 text-center">
-                <div className="border p-2 rounded-lg">
-                  <input
-                    type="color"
-                    value={theme.wine}
-                    onChange={(e) => setTheme({ ...theme, name: 'Custom', wine: e.target.value, wine2: e.target.value })}
-                    className="w-8 h-8 cursor-pointer mx-auto block"
-                  />
-                  <span className="text-xs text-gray-600 mt-1 block">Primary</span>
-                </div>
-                <div className="border p-2 rounded-lg">
-                  <input
-                    type="color"
-                    value={theme.gold}
-                    onChange={(e) => setTheme({ ...theme, name: 'Custom', gold: e.target.value })}
-                    className="w-8 h-8 cursor-pointer mx-auto block"
-                  />
-                  <span className="text-xs text-gray-600 mt-1 block">Gold/Accent</span>
-                </div>
-                <div className="border p-2 rounded-lg">
-                  <input
-                    type="color"
-                    value={theme.cream}
-                    onChange={(e) => setTheme({ ...theme, name: 'Custom', cream: e.target.value })}
-                    className="w-8 h-8 cursor-pointer mx-auto block"
-                  />
-                  <span className="text-xs text-gray-600 mt-1 block">Background</span>
-                </div>
-              </div>
-            </div>
-
             <button
               onClick={() => setIsCustomizerOpen(false)}
               style={{ backgroundColor: 'var(--wine)' }}
@@ -560,7 +448,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Shopping Bag Drawer */}
       <CartDrawer
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}
@@ -574,7 +461,6 @@ export default function App() {
         }}
       />
 
-      {/* Checkout Modal (Dynamic UPI QR & Cash on Delivery) */}
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
@@ -583,7 +469,6 @@ export default function App() {
         onOrderSuccess={handleOrderSuccess}
       />
 
-      {/* Secure Merchant Workspace (/admin) */}
       <AdminDashboard
         isOpen={isAdminOpen}
         onClose={() => {
@@ -595,7 +480,6 @@ export default function App() {
         onCatalogChanged={loadLiveProducts}
       />
 
-      {/* Customer & Merchant In-App Notification Toast */}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </>
   );
