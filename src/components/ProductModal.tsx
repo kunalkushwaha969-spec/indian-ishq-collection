@@ -243,7 +243,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 Add Product to Catalog
               </h2>
               <span className="text-[11px] text-[#776c6b]">
-                Cloud REST inventory sync with camera & format validation
+                Add a new handcrafted piece to your boutique catalog
               </span>
             </div>
           </div>
@@ -507,7 +507,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                   </div>
 
                   <p className="text-[11px] text-[#776c6b] leading-tight">
-                    Strictly accepts <strong className="text-[#292222]">JPEG, PNG, or WebP</strong> up to 5MB. Photo is saved directly to cloud storage.
+                    Strictly accepts <strong className="text-[#292222]">JPEG, PNG, or WebP</strong> up to 5MB. Photo is saved directly to your store catalog.
                   </p>
 
                   {imageFile && (
@@ -559,7 +559,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
               className="px-6 py-2.5 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold tracking-wider uppercase rounded-lg transition-colors flex items-center gap-2 shadow cursor-pointer disabled:opacity-50"
             >
               {(isUploading || isSaving) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>{isUploading ? 'Uploading Image...' : isSaving ? 'Saving...' : 'Save to Cloud Catalog'}</span>
+              <span>{isUploading ? 'Uploading Image...' : isSaving ? 'Saving...' : 'Save Product'}</span>
             </button>
           </div>
         </form>

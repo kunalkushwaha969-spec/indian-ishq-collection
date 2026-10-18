@@ -16,7 +16,6 @@ interface StorefrontProps {
   onWishlistClick: (product: Product) => void;
   onOpenCart: () => void;
   onOpenMerchant: () => void;
-  onOpenCloudDocs: () => void;
   onRetryFetch: () => void;
 }
 
@@ -33,7 +32,6 @@ export const Storefront: React.FC<StorefrontProps> = ({
   onWishlistClick,
   onOpenCart,
   onOpenMerchant,
-  onOpenCloudDocs,
   onRetryFetch,
 }) => {
   const categories = [
@@ -74,14 +72,6 @@ export const Storefront: React.FC<StorefrontProps> = ({
           <a href="#story" className="hover:text-[#70283b] transition-colors">
             Our Story
           </a>
-          <button
-            type="button"
-            onClick={onOpenCloudDocs}
-            className="hover:text-[#70283b] transition-colors flex items-center gap-1 text-[#b78a4b]"
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span>Cloud Specs</span>
-          </button>
         </nav>
 
         {/* Action Buttons */}
@@ -89,10 +79,11 @@ export const Storefront: React.FC<StorefrontProps> = ({
           <button
             type="button"
             onClick={onOpenMerchant}
-            className="hidden sm:flex items-center gap-1.5 px-4 py-2 border border-[#eadfda] rounded-full text-xs font-semibold text-[#70283b] bg-white hover:bg-[#fcf5f3] transition-colors"
+            className="text-xs text-[#776c6b] hover:text-[#70283b] transition-colors flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[#eadfda] bg-white hover:bg-[#fcf5f3]"
+            title="Merchant Login"
           >
             <Shield className="w-3.5 h-3.5" />
-            <span>Merchant Admin</span>
+            <span className="hidden sm:inline font-semibold">Merchant Login</span>
           </button>
 
           <button
@@ -138,13 +129,6 @@ export const Storefront: React.FC<StorefrontProps> = ({
                 <span>Explore the Collection</span>
                 <span>↗</span>
               </a>
-              <button
-                type="button"
-                onClick={onOpenMerchant}
-                className="px-5 py-3 bg-[#f3dfe0] hover:bg-[#edd4d5] text-[#70283b] text-xs font-semibold tracking-wider rounded-xs transition-colors border border-[#e2cbcc]"
-              >
-                Merchant Dashboard
-              </button>
             </div>
 
             <div className="text-[10px] tracking-widest text-[#776c6b] uppercase mt-8 font-semibold">
@@ -178,7 +162,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
                 Pieces to fall for
               </h2>
               <p className="text-xs text-[#776c6b]">
-                Live cloud catalog dynamically fetched from database.
+                Handcrafted ethnic wear, thoughtfully tailored for your special moments.
               </p>
             </div>
 
@@ -281,13 +265,12 @@ export const Storefront: React.FC<StorefrontProps> = ({
                 boutique, every stitch honors Indian heritage with a modern, romantic soul.
               </p>
               <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={onOpenCloudDocs}
-                  className="px-5 py-2.5 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold uppercase tracking-wider rounded transition-colors"
+                <a
+                  href="#shop"
+                  className="inline-block px-5 py-2.5 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold uppercase tracking-wider rounded transition-colors"
                 >
-                  View Cloud Architecture Specs
-                </button>
+                  Explore Collection
+                </a>
               </div>
             </div>
           </div>
@@ -301,7 +284,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
             <div className="font-serif text-2xl text-white font-bold">Indian Ishq</div>
             <p className="text-[#d8bfc2] mt-1">Wear your story. Celebrate your ishq.</p>
             <p className="text-[11px] text-[#a88289] mt-3">
-              Home-based ethnic fashion powered by serverless cloud database & instant UPI.
+              Home-based boutique ethnic fashion handcrafted with love & instant UPI.
             </p>
           </div>
 
@@ -318,7 +301,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
               onClick={onOpenMerchant}
               className="px-3.5 py-1.5 bg-[#f3dfe0] text-[#70283b] rounded font-semibold text-xs hover:bg-white transition-colors"
             >
-              Merchant Login (/admin)
+              Merchant Login
             </button>
             <p className="text-[10px] text-[#a88289] mt-3">
               © 2026 Indian Ishq Collection. All rights reserved.

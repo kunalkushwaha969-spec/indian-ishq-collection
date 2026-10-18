@@ -5,7 +5,6 @@ import { Storefront } from './components/Storefront';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
 import { AdminDashboard } from './components/AdminDashboard';
-import { CloudDocsModal } from './components/CloudDocsModal';
 import { Toast, type ToastData } from './components/Toast';
 
 export default function App() {
@@ -31,7 +30,6 @@ export default function App() {
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(() => {
     return window.location.hash === '#admin';
   });
-  const [isCloudDocsOpen, setIsCloudDocsOpen] = useState<boolean>(false);
 
   // In-app Notification / Toast state
   const [toast, setToast] = useState<ToastData | null>(null);
@@ -211,7 +209,6 @@ export default function App() {
         }}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenMerchant={() => setIsAdminOpen(true)}
-        onOpenCloudDocs={() => setIsCloudDocsOpen(true)}
         onRetryFetch={loadLiveProducts}
       />
 
@@ -248,13 +245,6 @@ export default function App() {
           }
         }}
         onCatalogChanged={loadLiveProducts}
-        onOpenCloudDocs={() => setIsCloudDocsOpen(true)}
-      />
-
-      {/* Cloud Blueprints & Code Snippets Modal */}
-      <CloudDocsModal
-        isOpen={isCloudDocsOpen}
-        onClose={() => setIsCloudDocsOpen(false)}
       />
 
       {/* Customer & Merchant In-App Notification Toast */}

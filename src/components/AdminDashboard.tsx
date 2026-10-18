@@ -11,14 +11,7 @@ import {
   verifyAdminSession,
   getStoredToken,
   setStoredToken,
-  testSupabaseConnection,
 } from '../services/api';
-import {
-  getEffectiveSupabaseUrl,
-  getEffectiveSupabaseKey,
-  saveCustomSupabaseCredentials,
-  isPlaceholderSupabaseUrl,
-} from '../services/supabase';
 import {
   type MerchantActivity,
   getMerchantActivities,
@@ -37,31 +30,23 @@ import {
   Trash2,
   RefreshCw,
   LogOut,
-  Database,
   CheckCircle,
-  Truck,
-  ExternalLink,
   Bell,
   Clock,
   CheckCheck,
-  Tag,
   Filter,
-  Link as LinkIcon,
-  CheckCircle2,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
   isOpen: boolean;
   onClose: () => void;
   onCatalogChanged: () => void;
-  onOpenCloudDocs: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   isOpen,
   onClose,
   onCatalogChanged,
-  onOpenCloudDocs,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
@@ -70,7 +55,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loginError, setLoginError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'inventory' | 'orders' | 'activity' | 'cloud'
+    'overview' | 'inventory' | 'orders' | 'activity'
   >('overview');
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -84,20 +69,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [unreadCount, setUnreadCount] = useState<number>(() => getUnreadActivityCount());
   const [activityFilter, setActivityFilter] = useState<'all' | 'order' | 'inventory' | 'status'>('all');
 
-  // Live Supabase connection management
-  const [supabaseUrlInput, setSupabaseUrlInput] = useState<string>(() => {
-    const url = getEffectiveSupabaseUrl();
-    return isPlaceholderSupabaseUrl(url) ? '' : url;
-  });
-  const [supabaseKeyInput, setSupabaseKeyInput] = useState<string>(() => {
-    const url = getEffectiveSupabaseUrl();
-    return isPlaceholderSupabaseUrl(url) ? '' : getEffectiveSupabaseKey();
-  });
-  const [isTestingConn, setIsTestingConn] = useState<boolean>(false);
-  const [connFeedback, setConnFeedback] = useState<{ ok: boolean; message: string } | null>(null);
-  const [activeDbUrl, setActiveDbUrl] = useState<string>(() => getEffectiveSupabaseUrl());
-
-  // Synchronize activity log in real-time
+  // Synchronize store activity log in real-time
   useEffect(() => {
     const updateActivities = () => {
       setActivities(getMerchantActivities());
@@ -105,15 +77,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
     window.addEventListener('ishq:activity-updated', updateActivities);
     return () => window.removeEventListener('ishq:activity-updated', updateActivities);
-  }, []);
-
-  // Listen to custom credentials updates
-  useEffect(() => {
-    const handleCredUpdate = () => {
-      setActiveDbUrl(getEffectiveSupabaseUrl());
-    };
-    window.addEventListener('ishq:supabase-config-updated', handleCredUpdate);
-    return () => window.removeEventListener('ishq:supabase-config-updated', handleCredUpdate);
   }, []);
 
   // Check auth session on open
@@ -136,22 +99,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsLoadingData(true);
     try {
       const [prods, ords] = await Promise.all([
-        fetchProducts('All', '').catch((e) => {
-          console.warn('Admin fetchProducts handled:', e);
-          return [];
-        }),
-        fetchOrders().catch((e) => {
-          console.warn('Admin fetchOrders handled:', e);
-          return [];
-        }),
+        fetchProducts('All', '').catch(() => []),
+        fetchOrders().catch(() => []),
       ]);
       setProducts(prods);
       setOrders(ords);
       setActivities(getMerchantActivities());
       setUnreadCount(getUnreadActivityCount());
-    } catch (err: any) {
-      console.warn('Admin data load notice:', err);
-    } finally {
+    } catch {} finally {
       setIsLoadingData(false);
     }
   };
@@ -180,7 +135,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         prev.map((p) => (p.id === id ? { ...p, stock: newStock } : p))
       );
       onCatalogChanged();
-      setBanner({ type: 'success', message: 'Stock updated successfully.' });
+      setBanner({ type: 'success', message: 'Stock updated!' });
       setTimeout(() => setBanner(null), 3000);
     } catch (err: any) {
       setBanner({ type: 'error', message: err.message || 'Failed to update stock.' });
@@ -193,7 +148,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setProducts((prev) => prev.filter((p) => p.id !== id));
       setConfirmDeleteId(null);
       onCatalogChanged();
-      setBanner({ type: 'success', message: 'Product removed from live catalog.' });
+      setBanner({ type: 'success', message: 'Product removed from catalog.' });
       setTimeout(() => setBanner(null), 3000);
     } catch (err: any) {
       setBanner({ type: 'error', message: err.message || 'Failed to delete product.' });
@@ -206,7 +161,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setOrders((prev) =>
         prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
       );
-      setBanner({ type: 'success', message: `Order #${orderId} marked as ${newStatus}.` });
+      setBanner({ type: 'success', message: `Order #${orderId} marked as ${newStatus}!` });
       setTimeout(() => setBanner(null), 3000);
     } catch (err: any) {
       setBanner({ type: 'error', message: err.message || 'Failed to update order status.' });
@@ -217,50 +172,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     markActivitiesAsRead();
     setActivities(getMerchantActivities());
     setUnreadCount(0);
-    setBanner({ type: 'success', message: 'All merchant notifications marked as read.' });
+    setBanner({ type: 'success', message: 'All store alerts marked as read.' });
     setTimeout(() => setBanner(null), 2500);
-  };
-
-  const handleTestAndSaveSupabase = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setConnFeedback(null);
-    setIsTestingConn(true);
-
-    const cleanUrl = supabaseUrlInput.trim().replace(/\/+$/, '');
-    const cleanKey = supabaseKeyInput.trim();
-
-    if (!cleanUrl.startsWith('http')) {
-      setConnFeedback({
-        ok: false,
-        message: 'Invalid Project URL. Must start with https:// (e.g. https://xyz.supabase.co)',
-      });
-      setIsTestingConn(false);
-      return;
-    }
-
-    if (cleanKey.length < 20) {
-      setConnFeedback({
-        ok: false,
-        message: 'Invalid API Key. Please paste your public anon key from Supabase.',
-      });
-      setIsTestingConn(false);
-      return;
-    }
-
-    const res = await testSupabaseConnection(cleanUrl, cleanKey);
-    setConnFeedback(res);
-    setIsTestingConn(false);
-
-    if (res.ok) {
-      saveCustomSupabaseCredentials(cleanUrl, cleanKey);
-      setActiveDbUrl(cleanUrl);
-      loadData();
-      onCatalogChanged();
-      setBanner({
-        type: 'success',
-        message: 'Connected to your Supabase project! Live database sync is now active.',
-      });
-    }
   };
 
   if (!isOpen) return null;
@@ -271,7 +184,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (activityFilter === 'all') return true;
     return a.type === activityFilter;
   });
-  const hasPlaceholderDb = isPlaceholderSupabaseUrl(activeDbUrl);
 
   return (
     <div
@@ -290,26 +202,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] tracking-widest uppercase font-semibold text-[#b78a4b]">
-                  Backend Protected Route
+                  Store Administration
                 </span>
                 {isAuthenticated && (
                   <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
                     Live Session Active
-                  </span>
-                )}
-                {hasPlaceholderDb ? (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('cloud')}
-                    className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>Demo Fallback Mode</span>
-                    <span>(Connect DB)</span>
-                  </button>
-                ) : (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Supabase Live</span>
                   </span>
                 )}
               </div>
@@ -343,14 +240,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <button
                   type="button"
-                  onClick={onOpenCloudDocs}
-                  className="px-3 py-2 border border-[#eadfda] bg-[#fcf9f5] hover:bg-white text-[#70283b] text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Cloud Blueprints</span>
-                </button>
-                <button
-                  type="button"
                   onClick={handleLogout}
                   className="px-3 py-2 border border-red-200 text-red-700 hover:bg-red-50 text-xs font-medium rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
                 >
@@ -374,7 +263,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="flex-1 overflow-y-auto">
           {isCheckingAuth ? (
             <div className="py-20 text-center text-[#776c6b] text-xs">
-              Verifying backend merchant authorization token...
+              Verifying merchant authorization...
             </div>
           ) : !isAuthenticated ? (
             /* LOCK SCREEN */
@@ -383,10 +272,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <Lock className="w-7 h-7" />
               </div>
 
-              <h3 className="font-serif text-2xl text-[#292222]">Protected /admin Route</h3>
+              <h3 className="font-serif text-2xl text-[#292222]">Merchant Login</h3>
               <p className="text-xs text-[#776c6b] mt-1 mb-6 leading-relaxed">
-                This endpoint requires authenticated credentials. Unauthorized visitors cannot view
-                order streams, sales totals, or modify inventory.
+                Sign in to manage catalog items, review incoming customer orders, and update inventory stock counts.
               </p>
 
               {loginError && (
@@ -411,7 +299,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-[#776c6b] uppercase mb-1">
-                    Admin Access Password
+                    Admin Password
                   </label>
                   <input
                     type="password"
@@ -430,35 +318,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="submit"
                   className="w-full py-3 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold tracking-wider uppercase rounded transition-colors shadow cursor-pointer"
                 >
-                  Verify & Enter Workspace
+                  Enter Workspace
                 </button>
               </form>
             </div>
           ) : (
             /* AUTHENTICATED MERCHANT DASHBOARD */
             <div className="p-4 sm:p-6 space-y-6">
-              {/* Notice Banner if running on demo fallback without real Supabase connection */}
-              {hasPlaceholderDb && (
-                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start sm:items-center justify-between gap-3 text-xs text-amber-900">
-                  <div className="flex items-center gap-2.5">
-                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-                    <div>
-                      <strong className="font-semibold block sm:inline">Database Notice: </strong>
-                      <span>
-                        Running on local resilient cache. To synchronize real-time product edits and customer orders with your live Supabase project, link your Project URL in Cloud Architecture.
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('cloud')}
-                    className="shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg text-xs transition-colors cursor-pointer"
-                  >
-                    Connect Supabase
-                  </button>
-                </div>
-              )}
-
               {/* Inline Notification Banner */}
               {banner && (
                 <div
@@ -536,28 +402,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Navigation Tabs with Badges */}
+              {/* Clean Store Management Tabs */}
               <div className="flex border-b border-[#eadfda] gap-2 overflow-x-auto pb-1">
                 {[
                   { id: 'overview', label: 'Overview' },
-                  { id: 'inventory', label: `Inventory (${products.length})` },
+                  { id: 'inventory', label: `Products (${products.length})` },
                   { id: 'orders', label: `Orders (${orders.length})` },
-                  {
-                    id: 'activity',
-                    label: 'Activity & Notifications',
-                    badge: unreadCount,
-                  },
-                  { id: 'cloud', label: 'Cloud Architecture & Sync' },
                 ].map((tab) => (
                   <button
                     key={tab.id}
                     type="button"
-                    onClick={() => {
-                      setActiveTab(tab.id as any);
-                      if (tab.id === 'activity') {
-                        handleMarkAllRead();
-                      }
-                    }}
+                    onClick={() => setActiveTab(tab.id as any)}
                     className={`px-4 py-2.5 rounded-t-lg text-xs font-semibold tracking-wider transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
                       activeTab === tab.id
                         ? 'bg-[#70283b] text-white'
@@ -565,11 +420,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }`}
                   >
                     <span>{tab.label}</span>
-                    {tab.badge !== undefined && tab.badge > 0 && (
-                      <span className="px-1.5 py-0.2 bg-red-600 text-white rounded-full text-[10px] font-bold">
-                        {tab.badge}
-                      </span>
-                    )}
                   </button>
                 ))}
               </div>
@@ -650,7 +500,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Bell className="w-4 h-4 text-[#70283b]" />
-                        <h4 className="font-serif text-lg text-[#292222]">Live Merchant Activity Stream</h4>
+                        <h4 className="font-serif text-lg text-[#292222]">Store Activity Stream</h4>
                       </div>
                       <button
                         type="button"
@@ -917,7 +767,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                     <div>
                       <h3 className="font-serif text-xl text-[#70283b] flex items-center gap-2">
-                        <span>Merchant Activity Log & Real-time Alerts</span>
+                        <span>Merchant Activity Log & Alerts</span>
                         {unreadCount > 0 && (
                           <span className="px-2 py-0.5 rounded-full text-xs bg-red-600 text-white font-sans font-bold">
                             {unreadCount} new
@@ -1031,161 +881,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
                 </div>
               )}
-
-              {/* TAB 5: CLOUD ARCHITECTURE & SUPABASE CONNECTION */}
-              {activeTab === 'cloud' && (
-                <div className="space-y-6">
-                  {/* LIVE SUPABASE PROJECT LINKER */}
-                  <div className="bg-white p-6 rounded-xl border border-[#b78a4b]/40 shadow-xs space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#eadfda] pb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2.5 bg-[#fcf9f5] border border-[#b78a4b]/30 rounded-xl text-[#70283b]">
-                          <Database className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <h4 className="font-serif text-lg text-[#292222]">
-                            Supabase Cloud Connection Settings
-                          </h4>
-                          <p className="text-xs text-[#776c6b]">
-                            Link your live Supabase project to synchronize orders and catalog modifications instantly.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {hasPlaceholderDb ? (
-                          <span className="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-semibold flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-amber-500" />
-                            <span>Demo Local Cache</span>
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-full text-xs font-semibold flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                            <span>Connected to Live Cloud</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {connFeedback && (
-                      <div
-                        className={`p-3.5 rounded-lg text-xs flex items-center gap-2 border ${
-                          connFeedback.ok
-                            ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                            : 'bg-red-50 text-red-900 border-red-200'
-                        }`}
-                      >
-                        {connFeedback.ok ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                        ) : (
-                          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-                        )}
-                        <span>{connFeedback.message}</span>
-                      </div>
-                    )}
-
-                    <form onSubmit={handleTestAndSaveSupabase} className="space-y-4 pt-1">
-                      <div>
-                        <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
-                          Supabase Project URL *
-                        </label>
-                        <input
-                          type="url"
-                          required
-                          placeholder="https://your-project-id.supabase.co"
-                          value={supabaseUrlInput}
-                          onChange={(e) => setSupabaseUrlInput(e.target.value)}
-                          className="w-full p-2.5 bg-[#fcf9f5] border border-[#eadfda] rounded-lg text-xs text-[#292222] font-mono focus:outline-[#b78a4b]"
-                        />
-                        <span className="text-[11px] text-[#776c6b] mt-1 block">
-                          Found in Supabase: <strong>Project Settings ➔ Configuration ➔ API ➔ Project URL</strong>
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
-                          Supabase Public Anon Key *
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                          value={supabaseKeyInput}
-                          onChange={(e) => setSupabaseKeyInput(e.target.value)}
-                          className="w-full p-2.5 bg-[#fcf9f5] border border-[#eadfda] rounded-lg text-xs text-[#292222] font-mono focus:outline-[#b78a4b]"
-                        />
-                        <span className="text-[11px] text-[#776c6b] mt-1 block">
-                          Found in Supabase: <strong>Project Settings ➔ Configuration ➔ API ➔ Project API keys ➔ `anon public`</strong>
-                        </span>
-                      </div>
-
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
-                        <button
-                          type="submit"
-                          disabled={isTestingConn}
-                          className="px-5 py-2.5 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                        >
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          <span>{isTestingConn ? 'Verifying Cloud Connection...' : 'Verify & Connect Live Database'}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={onOpenCloudDocs}
-                          className="text-xs text-[#70283b] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                        >
-                          <Database className="w-3.5 h-3.5" />
-                          <span>View SQL Schema Scripts</span>
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-
-                  {/* Database Architecture Details */}
-                  <div className="bg-white p-6 rounded-xl border border-[#eadfda] space-y-4">
-                    <h4 className="font-serif text-lg text-[#292222]">
-                      Database Architecture & Table Schemas
-                    </h4>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="p-4 bg-[#fcf9f5] border border-[#eadfda] rounded-xl">
-                        <strong className="block text-xs font-bold text-[#70283b] uppercase mb-1">
-                          Table 1: Products
-                        </strong>
-                        <p className="text-[11px] text-[#776c6b] mb-2">
-                          Fields: <code className="text-[#292222]">id, name, category, price, stock, image_url, tag, created_at</code>
-                        </p>
-                        <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
-                          Public Read · Merchant Write (RLS Protected)
-                        </span>
-                      </div>
-
-                      <div className="p-4 bg-[#fcf9f5] border border-[#eadfda] rounded-xl">
-                        <strong className="block text-xs font-bold text-[#70283b] uppercase mb-1">
-                          Table 2: Orders
-                        </strong>
-                        <p className="text-[11px] text-[#776c6b] mb-2">
-                          Fields: <code className="text-[#292222]">id, customer_details, items, payment_method, upi_ref_id, status, total</code>
-                        </p>
-                        <span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
-                          Public Create · Merchant Read/Update (RLS Protected)
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 flex gap-3">
-                      <button
-                        type="button"
-                        onClick={onOpenCloudDocs}
-                        className="px-4 py-2 bg-[#70283b] text-white rounded text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        <span>Open SQL & JavaScript Code Blueprints</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -1200,6 +895,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onCatalogChanged();
         }}
       />
+
     </div>
   );
 };
+

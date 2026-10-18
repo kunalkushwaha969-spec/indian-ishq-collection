@@ -5,6 +5,10 @@ import {
   getEffectiveSupabaseKey,
   isPlaceholderSupabaseUrl,
   saveCustomSupabaseCredentials,
+  sanitizeUrl,
+  sanitizeKey,
+  extractProjectRef,
+  DEFAULT_PROJECT_REF,
 } from './supabase';
 import { addMerchantActivity } from './activity';
 
@@ -74,6 +78,102 @@ const getSupabaseHeaders = () => {
   };
 };
 
+// Cached host reachability probe state to prevent ever calling fetch() on unresolvable hosts
+const knownResolvableHosts = new Map<string, { resolvable: boolean; timestamp: number }>();
+
+export async function isHostResolvable(url: string): Promise<boolean> {
+  try {
+    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+    const hostname = parsed.hostname;
+
+    // Check cache (valid for 60 seconds)
+    const cached = knownResolvableHosts.get(hostname);
+    if (cached && Date.now() - cached.timestamp < 60000) {
+      return cached.resolvable;
+    }
+
+    // 1. In dev/full-stack mode, ask local backend route (runs native Node dns.lookup without browser errors)
+    if (!isStaticHost()) {
+      try {
+        const res = await fetch(`/api/supabase/check-dns?host=${encodeURIComponent(hostname)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const isOk = !!data.resolvable;
+          knownResolvableHosts.set(hostname, { resolvable: isOk, timestamp: Date.now() });
+          return isOk;
+        }
+      } catch {}
+    }
+
+    // 2. On static host (e.g. GitHub Pages), use clean DNS-over-HTTPS (DoH) JSON lookup
+    // This returns HTTP 200 without ever producing net::ERR_NAME_NOT_RESOLVED in the console
+    try {
+      const dohRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(hostname)}`);
+      if (dohRes.ok) {
+        const dohData = await dohRes.json();
+        const isOk = dohData.Status === 0;
+        knownResolvableHosts.set(hostname, { resolvable: isOk, timestamp: Date.now() });
+        return isOk;
+      }
+    } catch {}
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Cloud connectivity circuit breaker to silence repetitive browser console error floods
+let cloudCircuitOpen = false;
+let cloudCircuitLastTrip = 0;
+let cloudCircuitReason = '';
+const CIRCUIT_COOLDOWN_MS = 60000; // 60s cooldown between background cloud retries
+
+export function isCloudCircuitActive(): boolean {
+  if (!cloudCircuitOpen) return true;
+  // If cooldown passed, permit one probe
+  if (Date.now() - cloudCircuitLastTrip > CIRCUIT_COOLDOWN_MS) {
+    cloudCircuitOpen = false;
+    return true;
+  }
+  return false;
+}
+
+export function getCloudSyncStatus(): { connected: boolean; circuitOpen: boolean; reason: string } {
+  return {
+    connected: !cloudCircuitOpen,
+    circuitOpen: cloudCircuitOpen,
+    reason: cloudCircuitReason,
+  };
+}
+
+export function tripCloudCircuit(reason?: string) {
+  cloudCircuitOpen = true;
+  cloudCircuitLastTrip = Date.now();
+  cloudCircuitReason = reason || 'Project unreachable or paused in Supabase';
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('ishq:cloud-sync-status', {
+        detail: { connected: false, reason: cloudCircuitReason },
+      })
+    );
+  }
+}
+
+export function resetCloudCircuit() {
+  cloudCircuitOpen = false;
+  cloudCircuitLastTrip = 0;
+  cloudCircuitReason = '';
+  knownResolvableHosts.clear();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('ishq:cloud-sync-status', {
+        detail: { connected: true, reason: '' },
+      })
+    );
+  }
+}
+
 // Resilient HTTP fetch helper with timeout
 async function httpFetch(
   url: string,
@@ -97,33 +197,62 @@ async function httpFetch(
  * Diagnostic test tool to verify Supabase project connectivity & schema tables
  */
 export async function testSupabaseConnection(
-  url = getEffectiveSupabaseUrl(),
-  key = getEffectiveSupabaseKey()
-): Promise<{ ok: boolean; message: string; tableStatus: 'ready' | 'missing_tables' | 'unreachable' }> {
+  rawUrl = getEffectiveSupabaseUrl(),
+  rawKey = getEffectiveSupabaseKey()
+): Promise<{
+  ok: boolean;
+  message: string;
+  projectRef: string;
+  tableStatus: 'ready' | 'missing_tables' | 'unreachable';
+}> {
+  const url = sanitizeUrl(rawUrl);
+  const key = sanitizeKey(rawKey);
+  const projectRef = extractProjectRef(url);
+
+  // Check if host actually resolves in DNS first (zero console errors)
+  const isResolvable = await isHostResolvable(url);
+  if (!isResolvable) {
+    tripCloudCircuit('Project unreachable or paused in Supabase');
+    return {
+      ok: false,
+      message: `Project "${projectRef}" is unreachable or paused on Supabase free tier. In your Supabase Dashboard, click "Restore project" to re-activate your database.`,
+      projectRef,
+      tableStatus: 'unreachable',
+    };
+  }
+
   try {
     const testUrl = `${url}/rest/v1/products?select=id&limit=1`;
-    const res = await httpFetch(testUrl, {
-      method: 'GET',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
+    const res = await httpFetch(
+      testUrl,
+      {
+        method: 'GET',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        },
       },
-    }, 2500);
+      3000
+    );
 
     if (res.ok) {
+      resetCloudCircuit();
       return {
         ok: true,
         message: 'Successfully connected to Supabase! Live database sync is active.',
+        projectRef,
         tableStatus: 'ready',
       };
     }
 
     if (res.status === 404 || res.status === 400) {
+      resetCloudCircuit();
       const body = await res.json().catch(() => ({}));
       if (body.message?.includes('relation "public.products" does not exist')) {
         return {
           ok: true,
           message: 'Connected to Supabase project, but "products" table is not created yet. Run the SQL schema to create tables.',
+          projectRef,
           tableStatus: 'missing_tables',
         };
       }
@@ -131,13 +260,16 @@ export async function testSupabaseConnection(
 
     return {
       ok: false,
-      message: `Supabase returned HTTP ${res.status}. Check API key or Project URL permissions.`,
+      message: `Supabase returned HTTP ${res.status}. Check API key or project permissions.`,
+      projectRef,
       tableStatus: 'unreachable',
     };
   } catch (err: any) {
+    tripCloudCircuit(err.message);
     return {
       ok: false,
-      message: `Connection failed (${err.message || 'DNS unresolvable'}). Check Project URL.`,
+      message: `Project "${projectRef}" is unreachable or paused on Supabase free tier. In your Supabase Dashboard, click "Restore project" to re-activate your database.`,
+      projectRef,
       tableStatus: 'unreachable',
     };
   }
@@ -150,37 +282,45 @@ export async function fetchProducts(
 ): Promise<Product[]> {
   const supabaseUrl = getEffectiveSupabaseUrl();
 
-  // A. Attempt direct Supabase PostgREST HTTP GET if not unresolvable placeholder
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
-    try {
-      const params = new URLSearchParams();
-      params.set('select', '*');
-      if (category && category !== 'All') {
-        params.set('category', `eq.${category}`);
-      }
-      if (searchQuery.trim()) {
-        params.set('name', `ilike.%${searchQuery.trim()}%`);
-      }
-      params.set('order', 'created_at.desc');
-
-      const res = await httpFetch(
-        `${getSupabaseRestUrl()}/products?${params.toString()}`,
-        {
-          method: 'GET',
-          headers: getSupabaseHeaders(),
-        },
-        1800
-      );
-
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setLocalProducts(data as Product[]);
-          return data as Product[];
+  // A. Attempt direct Supabase PostgREST HTTP GET if not unresolvable placeholder and circuit is clear
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
+    const isResolvable = await isHostResolvable(supabaseUrl);
+    if (!isResolvable) {
+      tripCloudCircuit('DNS unresolvable / project paused');
+    } else {
+      try {
+        const params = new URLSearchParams();
+        params.set('select', '*');
+        if (category && category !== 'All') {
+          params.set('category', `eq.${category}`);
         }
+        if (searchQuery.trim()) {
+          params.set('name', `ilike.%${searchQuery.trim()}%`);
+        }
+        params.set('order', 'created_at.desc');
+
+        const res = await httpFetch(
+          `${getSupabaseRestUrl()}/products?${params.toString()}`,
+          {
+            method: 'GET',
+            headers: getSupabaseHeaders(),
+          },
+          1800
+        );
+
+        if (res.ok) {
+          resetCloudCircuit();
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setLocalProducts(data as Product[]);
+            return data as Product[];
+          }
+        } else {
+          resetCloudCircuit();
+        }
+      } catch (err: any) {
+        tripCloudCircuit(err.message || 'DNS unresolvable');
       }
-    } catch (err: any) {
-      console.info('[REST Data Service]: Supabase cloud HTTP notice (using fallback):', err.message || err);
     }
   }
 
@@ -247,26 +387,41 @@ export async function createProduct(
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt direct Supabase PostgREST HTTP POST
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
-      const res = await httpFetch(
+      let res = await httpFetch(
         `${getSupabaseRestUrl()}/products`,
         {
           method: 'POST',
           headers: getSupabaseHeaders(),
           body: JSON.stringify([productRecord]),
         },
-        2000
+        2200
       );
 
+      // If failed due to column mismatch (e.g. existing table missing 'fabric' column), retry with core columns
+      if (!res.ok && (res.status === 400 || res.status === 404)) {
+        const { fabric, ...coreRecord } = productRecord;
+        res = await httpFetch(
+          `${getSupabaseRestUrl()}/products`,
+          {
+            method: 'POST',
+            headers: getSupabaseHeaders(),
+            body: JSON.stringify([coreRecord]),
+          },
+          2000
+        );
+      }
+
       if (res.ok) {
+        resetCloudCircuit();
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           createdProduct = data[0] as Product;
         }
       }
     } catch (err: any) {
-      console.info('[REST Data Service]: Direct cloud POST notice, saving via fallback:', err.message || err);
+      tripCloudCircuit(err.message || 'DNS unresolvable');
     }
   }
 
@@ -317,7 +472,7 @@ export async function updateProductStock(
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP PATCH
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
       const res = await httpFetch(
         `${getSupabaseRestUrl()}/products?id=eq.${id}`,
@@ -330,13 +485,14 @@ export async function updateProductStock(
       );
 
       if (res.ok) {
+        resetCloudCircuit();
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           updatedProduct = data[0] as Product;
         }
       }
     } catch (err: any) {
-      console.info('[REST Data Service]: Cloud PATCH notice, updating via fallback:', err.message || err);
+      tripCloudCircuit(err.message || 'DNS unresolvable');
     }
   }
 
@@ -392,9 +548,9 @@ export async function deleteProduct(id: string): Promise<void> {
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP DELETE
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
-      await httpFetch(
+      const res = await httpFetch(
         `${getSupabaseRestUrl()}/products?id=eq.${id}`,
         {
           method: 'DELETE',
@@ -402,7 +558,10 @@ export async function deleteProduct(id: string): Promise<void> {
         },
         1500
       );
-    } catch {}
+      if (res.ok) resetCloudCircuit();
+    } catch (err: any) {
+      tripCloudCircuit(err.message || 'DNS unresolvable');
+    }
   }
 
   // B. Attempt Backend REST API only if not static host
@@ -453,7 +612,7 @@ export async function createOrder(payload: {
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP POST
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
       const res = await httpFetch(
         `${getSupabaseRestUrl()}/orders`,
@@ -466,13 +625,14 @@ export async function createOrder(payload: {
       );
 
       if (res.ok) {
+        resetCloudCircuit();
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           placedOrder = data[0] as Order;
         }
       }
     } catch (err: any) {
-      console.info('[REST Data Service]: Cloud order POST notice, saving via fallback:', err.message || err);
+      tripCloudCircuit(err.message || 'DNS unresolvable');
     }
   }
 
@@ -500,12 +660,15 @@ export async function createOrder(payload: {
   const existingOrders = getLocalOrders();
   setLocalOrders([placedOrder, ...existingOrders.filter((o) => o.id !== placedOrder!.id)]);
 
-  // Decrement stock in local cache
+  // Decrement stock in local cache and sync with Supabase
   const products = getLocalProducts();
   payload.items.forEach((item) => {
     const prod = products.find((p) => p.id === item.id);
     if (prod) {
-      prod.stock = Math.max(0, prod.stock - item.qty);
+      const newStock = Math.max(0, prod.stock - item.qty);
+      prod.stock = newStock;
+      // Sync decremented inventory count to cloud database
+      updateProductStock(item.id, newStock).catch(() => {});
     }
   });
   setLocalProducts(products);
@@ -524,7 +687,7 @@ export async function fetchOrders(): Promise<Order[]> {
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP GET
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
       const res = await httpFetch(
         `${getSupabaseRestUrl()}/orders?select=*&order=created_at.desc`,
@@ -536,6 +699,7 @@ export async function fetchOrders(): Promise<Order[]> {
       );
 
       if (res.ok) {
+        resetCloudCircuit();
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           setLocalOrders(data as Order[]);
@@ -543,7 +707,7 @@ export async function fetchOrders(): Promise<Order[]> {
         }
       }
     } catch (err: any) {
-      console.info('[REST Data Service]: Cloud orders GET notice, fetching via fallback:', err.message || err);
+      tripCloudCircuit(err.message || 'DNS unresolvable');
     }
   }
 
@@ -578,7 +742,7 @@ export async function updateOrderStatus(
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt Supabase PostgREST HTTP PATCH
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
       const res = await httpFetch(
         `${getSupabaseRestUrl()}/orders?id=eq.${orderId}`,
@@ -591,12 +755,15 @@ export async function updateOrderStatus(
       );
 
       if (res.ok) {
+        resetCloudCircuit();
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           updatedOrder = data[0] as Order;
         }
       }
-    } catch {}
+    } catch (err: any) {
+      tripCloudCircuit(err.message || 'DNS unresolvable');
+    }
   }
 
   // B. Attempt Backend REST API only if not static host
@@ -652,7 +819,24 @@ export async function loginAdmin(
   password: string,
   email?: string
 ): Promise<{ token: string; user: { email: string; role: string } }> {
-  // If static deployment (GitHub Pages), verify demo credentials locally
+  // If running in full-stack mode, authenticate against backend route to get server token
+  if (!isStaticHost()) {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, email }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setStoredToken(data.token);
+        return data;
+      }
+    } catch {}
+  }
+
+  // If static deployment (GitHub Pages) or offline, verify demo credentials locally
   if (password === 'ishq2026') {
     const demoToken = 'ishq_static_admin_token_' + Date.now();
     setStoredToken(demoToken);
@@ -662,21 +846,7 @@ export async function loginAdmin(
     };
   }
 
-  // Otherwise check backend route
-  const res = await fetch('/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password, email }),
-  });
-
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Invalid merchant credentials');
-  }
-
-  const data = await res.json();
-  setStoredToken(data.token);
-  return data;
+  throw new Error('Invalid merchant credentials');
 }
 
 export async function verifyAdminSession(token = getStoredToken()): Promise<boolean> {
@@ -759,7 +929,7 @@ export async function uploadImageDirect(file: File): Promise<string> {
   const supabaseUrl = getEffectiveSupabaseUrl();
 
   // A. Attempt standard HTTP REST upload to Supabase Storage endpoint
-  if (!isPlaceholderSupabaseUrl(supabaseUrl)) {
+  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
     try {
       const storageUrl = `${supabaseUrl}/storage/v1/object/product-images/${filePath}`;
       const res = await httpFetch(storageUrl, {
@@ -773,10 +943,11 @@ export async function uploadImageDirect(file: File): Promise<string> {
       }, 2500);
 
       if (res.ok) {
+        resetCloudCircuit();
         return `${supabaseUrl}/storage/v1/object/public/product-images/${filePath}`;
       }
     } catch (err: any) {
-      console.info('[REST Data Service]: Storage cloud HTTP upload notice:', err.message || err);
+      tripCloudCircuit(err.message || 'DNS unresolvable');
     }
   }
 
