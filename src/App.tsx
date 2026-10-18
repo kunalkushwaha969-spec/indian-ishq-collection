@@ -1,25 +1,32 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Product, CartItem, Order } from './utils/ecommerce';
-import { initialProducts } from './utils/ecommerce';
-import { fetchProducts, subscribeToFirestoreProducts } from './services/api';
+import { fetchProducts } from './services/api';
 import { Storefront } from './components/Storefront';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Toast, type ToastData } from './components/Toast';
 
+interface StoreTheme {
+  name: string;
+  wine: string;
+  wine2: string;
+  rose: string;
+  cream: string;
+  gold: string;
+}
+
+const THEME_PRESETS: StoreTheme[] = [
+  { name: 'Royal Wine (Default)', wine: '#70283b', wine2: '#4c1727', rose: '#f3dfe0', cream: '#fbf7f0', gold: '#b78a4b' },
+  { name: 'Bridal Crimson', wine: '#8b1e24', wine2: '#5a1015', rose: '#fce8e8', cream: '#fffaf5', gold: '#d4af37' },
+  { name: 'Emerald Maharani', wine: '#134e4a', wine2: '#0f2926', rose: '#e0f2f1', cream: '#f9fbf9', gold: '#c59b27' },
+  { name: 'Midnight Peacock', wine: '#1e293b', wine2: '#0f172a', rose: '#e2e8f0', cream: '#f8fafc', gold: '#ca8a04' },
+  { name: 'Dusty Rose Boutique', wine: '#9d4edd', wine2: '#5a189a', rose: '#f3e8ff', cream: '#fdfaff', gold: '#d97706' },
+];
+
 export default function App() {
-  const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const saved = localStorage.getItem('ishq_products_cache_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch {}
-    return initialProducts;
-  });
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   const [activeCategory, setActiveCategory] = useState<string>('All');
@@ -40,6 +47,35 @@ export default function App() {
   const [isAdminOpen, setIsAdminOpen] = useState<boolean>(() => {
     return window.location.hash === '#admin';
   });
+  const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
+
+  // Theme & Cover Photo state
+  const [theme, setTheme] = useState<StoreTheme>(() => {
+    try {
+      const saved = localStorage.getItem('ishq_theme');
+      return saved ? JSON.parse(saved) : THEME_PRESETS[0];
+    } catch {
+      return THEME_PRESETS[0];
+    }
+  });
+
+  const [coverPhoto, setCoverPhoto] = useState<string>(() => {
+    try {
+      return localStorage.getItem('ishq_cover_photo') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  // Unread Order Notifications for Merchant
+  const [unreadOrders, setUnreadOrders] = useState<Order[]>(() => {
+    try {
+      const saved = localStorage.getItem('ishq_unread_orders');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // In-app Notification / Toast state
   const [toast, setToast] = useState<ToastData | null>(null);
@@ -52,6 +88,58 @@ export default function App() {
     }
   }, []);
 
+  // Apply CSS variables dynamically when theme changes
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--wine', theme.wine);
+    root.style.setProperty('--wine2', theme.wine2);
+    root.style.setProperty('--rose', theme.rose);
+    root.style.setProperty('--cream', theme.cream);
+    root.style.setProperty('--gold', theme.gold);
+    try {
+      localStorage.setItem('ishq_theme', JSON.stringify(theme));
+    } catch {}
+  }, [theme]);
+
+  // Apply custom cover photo to storefront hero image
+  const applyCoverPhotoToDOM = useCallback((photoUrl: string) => {
+    if (!photoUrl) return;
+    setTimeout(() => {
+      const heroImages = document.querySelectorAll('header img, section:first-of-type img, .hero-image');
+      if (heroImages.length > 0) {
+        const mainHeroImg = heroImages[0] as HTMLImageElement;
+        mainHeroImg.src = photoUrl;
+      }
+    }, 300);
+  }, []);
+
+  useEffect(() => {
+    if (coverPhoto) {
+      applyCoverPhotoToDOM(coverPhoto);
+      try {
+        localStorage.setItem('ishq_cover_photo', coverPhoto);
+      } catch {}
+    }
+  }, [coverPhoto, products, applyCoverPhotoToDOM]);
+
+  // Play notification sound on new order
+  const playOrderSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.6);
+    } catch {}
+  };
+
   // Auto-dismiss toast after 3.8s
   useEffect(() => {
     if (!toast) return;
@@ -61,7 +149,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Listen for hash changes (e.g. user goes to #admin)
+  // Listen for hash changes
   useEffect(() => {
     const handleHashChange = () => {
       if (window.location.hash === '#admin') {
@@ -76,208 +164,40 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('ishq_cart', JSON.stringify(cart));
-    } catch (e) {}
+    } catch {}
   }, [cart]);
 
-  // Dynamic live catalog fetching & real-time cloud synchronization
+  // Dynamic live catalog fetching
   const loadLiveProducts = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
     try {
       const live = await fetchProducts(activeCategory, searchQuery);
-      if (live && live.length > 0) {
-        setProducts(live);
-      }
+      setProducts(live);
     } catch (err: any) {
-      console.warn('Live products fetch notice:', err);
+      setError(err.message || 'Unable to connect to live product database');
+    } finally {
+      setIsLoading(false);
     }
   }, [activeCategory, searchQuery]);
 
   useEffect(() => {
     loadLiveProducts();
+  }, [loadLiveProducts]);
 
-    // Instant multi-device sync: any stock or product update on mobile/admin reflects live
-    const unsubscribe = subscribeToFirestoreProducts((liveItems) => {
-      let filtered = [...liveItems];
-      if (activeCategory && activeCategory !== 'All') {
-        filtered = filtered.filter((p) => p.category.toLowerCase() === activeCategory.toLowerCase());
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        filtered = filtered.filter(
-          (p) =>
-            p.name.toLowerCase().includes(q) ||
-            (p.fabric && p.fabric.toLowerCase().includes(q)) ||
-            (p.tag && p.tag.toLowerCase().includes(q))
-        );
-      }
-      setProducts(filtered);
-      setIsLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [activeCategory, searchQuery, loadLiveProducts]);
-
-  // Cart operations with instant in-app toast feedback
-  const handleAddToCart = (product: Product) => {
-    if (product.stock <= 0) {
-      showToast({
-        type: 'error',
-        title: 'Sold Out',
-        message: `"${product.name}" is currently out of stock.`,
-      });
-      return;
-    }
-
-    setCart((prev) => {
-      const existing = prev.find((item) => item.id === product.id);
-      if (existing) {
-        if (existing.qty >= product.stock) {
-          showToast({
-            type: 'error',
-            title: 'Stock Limit Reached',
-            message: `Only ${product.stock} pieces of "${product.name}" are currently available in inventory.`,
-          });
-          return prev;
-        }
-
-        showToast({
-          type: 'cart',
-          title: 'Bag Quantity Updated',
-          message: `Increased quantity of "${product.name}" to ${existing.qty + 1}.`,
-          actionLabel: 'Open Bag',
-          onAction: () => setIsCartOpen(true),
-        });
-
-        return prev.map((item) =>
-          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
-        );
-      }
-
-      showToast({
-        type: 'cart',
-        title: 'Added to Bag ✨',
-        message: `"${product.name}" is now in your shopping bag.`,
-        actionLabel: 'View Bag',
-        onAction: () => setIsCartOpen(true),
-      });
-
-      return [...prev, { id: product.id, qty: 1 }];
-    });
-  };
-
-  const handleUpdateQty = (productId: string, delta: number) => {
-    const product = products.find((p) => p.id === productId);
-    setCart((prev) => {
-      const existing = prev.find((i) => i.id === productId);
-      if (!existing) return prev;
-
-      if (delta > 0 && product && existing.qty >= product.stock) {
-        showToast({
-          type: 'error',
-          title: 'Stock Limit',
-          message: `Cannot add more. Available stock is ${product.stock}.`,
-        });
-        return prev;
-      }
-
-      const newQty = existing.qty + delta;
-      if (newQty <= 0) {
+  // Handle cover photo file upload from mobile gallery or PC
+  const handleCoverFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setCoverPhoto(reader.result);
         showToast({
           type: 'info',
-          title: 'Removed from Bag',
-          message: product ? `"${product.name}" was removed from your bag.` : 'Item removed.',
+          title: 'Cover Photo Updated!',
+          message: 'Aapki nayi cover photo storefront par set ho gayi hai.',
         });
-        return prev.filter((i) => i.id !== productId);
       }
-      return prev.map((i) => (i.id === productId ? { ...i, qty: newQty } : i));
-    });
-  };
-
-  const handleRemoveItem = (productId: string) => {
-    const product = products.find((p) => p.id === productId);
-    setCart((prev) => prev.filter((i) => i.id !== productId));
-    showToast({
-      type: 'info',
-      title: 'Item Removed',
-      message: product ? `"${product.name}" was removed from your bag.` : 'Item removed.',
-    });
-  };
-
-  // Instant order confirmation alert
-  const handleOrderSuccess = (order: Order) => {
-    setCart([]);
-    loadLiveProducts(); // refresh inventory stock
-    showToast({
-      type: 'order',
-      title: 'Order Confirmed! 🎉',
-      message: `Order #${order.id} (₹${order.total.toLocaleString('en-IN')}) placed successfully for ${order.customer_details.name}. Preparing your handcrafted outfit!`,
-      actionLabel: 'Merchant Workspace',
-      onAction: () => setIsAdminOpen(true),
-    });
-  };
-
-  const cartCount = cart.reduce((sum, item) => sum + item.qty, 0);
-
-  return (
-    <>
-      <Storefront
-        products={products}
-        isLoading={isLoading}
-        error={error}
-        activeCategory={activeCategory}
-        searchQuery={searchQuery}
-        cartCount={cartCount}
-        onCategoryChange={setActiveCategory}
-        onSearchChange={setSearchQuery}
-        onAddToCart={handleAddToCart}
-        onWishlistClick={(prod) => {
-          showToast({
-            type: 'info',
-            title: 'Saved to Wishlist',
-            message: `"${prod.name}" saved to your wishlist.`,
-          });
-        }}
-        onOpenCart={() => setIsCartOpen(true)}
-        onOpenMerchant={() => setIsAdminOpen(true)}
-        onRetryFetch={loadLiveProducts}
-      />
-
-      {/* Shopping Bag Drawer */}
-      <CartDrawer
-        isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
-        cart={cart}
-        products={products}
-        onUpdateQty={handleUpdateQty}
-        onRemoveItem={handleRemoveItem}
-        onProceedToCheckout={() => {
-          setIsCartOpen(false);
-          setIsCheckoutOpen(true);
-        }}
-      />
-
-      {/* Checkout Modal (Dynamic UPI QR & Cash on Delivery) */}
-      <CheckoutModal
-        isOpen={isCheckoutOpen}
-        onClose={() => setIsCheckoutOpen(false)}
-        cart={cart}
-        products={products}
-        onOrderSuccess={handleOrderSuccess}
-      />
-
-      {/* Secure Merchant Workspace (/admin) */}
-      <AdminDashboard
-        isOpen={isAdminOpen}
-        onClose={() => {
-          setIsAdminOpen(false);
-          if (window.location.hash === '#admin') {
-            window.history.pushState(null, '', window.location.pathname);
-          }
-        }}
-        onCatalogChanged={loadLiveProducts}
-      />
-
-      {/* Customer & Merchant In-App Notification Toast */}
-      <Toast toast={toast} onClose={() => setToast(null)} />
-    </>
-  );
-}
+    };
+    reader.readAsDataURL(file);
