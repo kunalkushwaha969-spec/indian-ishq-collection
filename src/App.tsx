@@ -64,7 +64,7 @@ export default function App() {
   const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
 
 const [isMerchantAuthenticated, setIsMerchantAuthenticated] =
-  useState<boolean>(() => !!getStoredToken());
+  useState<boolean>(false);
 
 const handleMerchantAuthChange = useCallback(
   (authenticated: boolean) => {
