@@ -74,18 +74,8 @@ const handleMerchantAuthChange = useCallback(
 );
 
 useEffect(() => {
-  const checkAuth = () => {
-    setIsMerchantAuthenticated(!!getStoredToken());
-  };
-
-  checkAuth();
-
-  window.addEventListener('storage', checkAuth);
-
-  return () => {
-    window.removeEventListener('storage', checkAuth);
-  };
-}, [isAdminOpen]);
+  setIsMerchantAuthenticated(!!getStoredToken());
+}, []);
 
   const [theme, setTheme] = useState<StoreTheme>(() => {
     try {
