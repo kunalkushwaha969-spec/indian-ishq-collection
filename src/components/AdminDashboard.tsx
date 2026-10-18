@@ -94,12 +94,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (isOpen) {
       const checkAuth = async () => {
         setIsCheckingAuth(true);
-        const valid = await verifyAdminSession();
-        setIsAuthenticated(valid);
-        setIsCheckingAuth(false);
-        if (valid) {
-          loadData();
-        }
+       const valid = await verifyAdminSession();
+
+setIsAuthenticated(valid);
+onAuthChange(valid);
+setIsCheckingAuth(false);
+
+if (valid) {
+  loadData();
+}
       };
       checkAuth();
     }
