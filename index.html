@@ -10,50 +10,16 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%234a1525'/><text y='.72em' x='50%' text-anchor='middle' font-family='serif' font-weight='bold' font-size='65' fill='%23d4af37'>II</text></svg>" />
-    <!-- Early WebSocket silencer and unhandled rejection suppressor -->
+    <!-- Global unhandled error shield -->
     <script>
       (function() {
-        // Intercept and prevent unhandled WebSocket rejections in sandboxed preview environments
         window.addEventListener('unhandledrejection', function(event) {
           var reason = event && event.reason;
-          var msg = (reason && (reason.message || reason.stack || String(reason))) || '';
+          var msg = (reason && (reason.message || String(reason))) || '';
           if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
             event.preventDefault();
-            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
           }
-        }, true);
-
-        window.addEventListener('error', function(event) {
-          var msg = (event && (event.message || '')) || '';
-          if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
-            event.preventDefault();
-            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-          }
-        }, true);
-
-        // Stub WebSocket for vite-hmr protocol so it never closes in error
-        var NativeWS = window.WebSocket;
-        if (NativeWS) {
-          window.WebSocket = function(url, protocols) {
-            var isHmr = protocols === 'vite-hmr' || (typeof url === 'string' && (url.indexOf('vite-hmr') !== -1 || url.indexOf('24678') !== -1));
-            if (isHmr) {
-              var dummy = new EventTarget();
-              dummy.readyState = 1; // OPEN
-              dummy.send = function() {};
-              dummy.close = function() {};
-              setTimeout(function() {
-                dummy.dispatchEvent(new Event('open'));
-              }, 0);
-              return dummy;
-            }
-            return new NativeWS(url, protocols);
-          };
-          window.WebSocket.prototype = NativeWS.prototype;
-          window.WebSocket.CONNECTING = 0;
-          window.WebSocket.OPEN = 1;
-          window.WebSocket.CLOSING = 2;
-          window.WebSocket.CLOSED = 3;
-        }
+        });
       })();
     </script>
 

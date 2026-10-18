@@ -4,7 +4,6 @@ import {
   collection,
   doc,
   getDocs,
-  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -12,22 +11,29 @@ import {
   orderBy,
   onSnapshot,
   writeBatch,
+  type Firestore,
 } from 'firebase/firestore';
 import type { Product, Order } from '../utils/ecommerce';
 import { initialProducts } from '../utils/ecommerce';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Safely initialize Firestore instance with fallback
+let dbInstance: Firestore | null = null;
+try {
+  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+} catch (err) {
+  console.warn('Firebase initialization notice:', err);
+}
+
+export const db = dbInstance;
 
 const PRODUCTS_COLLECTION = 'products';
 const ORDERS_COLLECTION = 'orders';
 
-/**
- * Ensures initial ethnic wear products are seeded into Firestore on first load.
- */
 let isSeeding = false;
 export async function seedFirestoreIfEmpty(): Promise<Product[]> {
+  if (!db) return [...initialProducts];
   try {
     const prodsRef = collection(db, PRODUCTS_COLLECTION);
     const snap = await getDocs(prodsRef);
@@ -54,10 +60,8 @@ export async function seedFirestoreIfEmpty(): Promise<Product[]> {
   }
 }
 
-/**
- * Fetch all products from Firestore, sorted by creation date or catalog priority.
- */
 export async function fetchFirestoreProducts(): Promise<Product[]> {
+  if (!db) return [...initialProducts];
   try {
     const q = query(collection(db, PRODUCTS_COLLECTION), orderBy('created_at', 'desc'));
     const snap = await getDocs(q);
@@ -68,8 +72,8 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
     snap.forEach((d) => list.push(d.data() as Product));
     return list;
   } catch (err) {
-    // If empty or orderBy index not yet built, fetch by collection
     try {
+      if (!db) return [...initialProducts];
       const snap = await getDocs(collection(db, PRODUCTS_COLLECTION));
       if (snap.empty) {
         return await seedFirestoreIfEmpty();
@@ -77,42 +81,46 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
       const list: Product[] = [];
       snap.forEach((d) => list.push(d.data() as Product));
       return list;
-    } catch (innerErr) {
-      console.warn('Firestore fetch products fallback:', innerErr);
-      return [];
+    } catch {
+      return [...initialProducts];
     }
   }
 }
 
-/**
- * Save or create a product in Firestore.
- */
 export async function saveFirestoreProduct(product: Product): Promise<Product> {
-  const docRef = doc(db, PRODUCTS_COLLECTION, product.id);
-  await setDoc(docRef, product, { merge: true });
-  return product;
+  if (!db) return product;
+  try {
+    const docRef = doc(db, PRODUCTS_COLLECTION, product.id);
+    await setDoc(docRef, product, { merge: true });
+    return product;
+  } catch (err) {
+    console.warn('Firestore save product warning:', err);
+    return product;
+  }
 }
 
-/**
- * Update stock count for a specific product in Firestore.
- */
 export async function updateFirestoreProductStock(id: string, stock: number): Promise<void> {
-  const docRef = doc(db, PRODUCTS_COLLECTION, id);
-  await updateDoc(docRef, { stock: Math.max(0, stock) });
+  if (!db) return;
+  try {
+    const docRef = doc(db, PRODUCTS_COLLECTION, id);
+    await updateDoc(docRef, { stock: Math.max(0, stock) });
+  } catch (err) {
+    console.warn('Firestore stock update warning:', err);
+  }
 }
 
-/**
- * Delete a product from Firestore.
- */
 export async function deleteFirestoreProduct(id: string): Promise<void> {
-  const docRef = doc(db, PRODUCTS_COLLECTION, id);
-  await deleteDoc(docRef);
+  if (!db) return;
+  try {
+    const docRef = doc(db, PRODUCTS_COLLECTION, id);
+    await deleteDoc(docRef);
+  } catch (err) {
+    console.warn('Firestore delete product warning:', err);
+  }
 }
 
-/**
- * Fetch orders from Firestore.
- */
 export async function fetchFirestoreOrders(): Promise<Order[]> {
+  if (!db) return [];
   try {
     const q = query(collection(db, ORDERS_COLLECTION), orderBy('created_at', 'desc'));
     const snap = await getDocs(q);
@@ -121,6 +129,7 @@ export async function fetchFirestoreOrders(): Promise<Order[]> {
     return list;
   } catch {
     try {
+      if (!db) return [];
       const snap = await getDocs(collection(db, ORDERS_COLLECTION));
       const list: Order[] = [];
       snap.forEach((d) => list.push(d.data() as Order));
@@ -131,28 +140,31 @@ export async function fetchFirestoreOrders(): Promise<Order[]> {
   }
 }
 
-/**
- * Save a new order to Firestore.
- */
 export async function saveFirestoreOrder(order: Order): Promise<Order> {
-  const docRef = doc(db, ORDERS_COLLECTION, order.id);
-  await setDoc(docRef, order);
-  return order;
+  if (!db) return order;
+  try {
+    const docRef = doc(db, ORDERS_COLLECTION, order.id);
+    await setDoc(docRef, order);
+    return order;
+  } catch (err) {
+    console.warn('Firestore save order warning:', err);
+    return order;
+  }
 }
 
-/**
- * Update order status in Firestore.
- */
 export async function updateFirestoreOrderStatus(orderId: string, status: Order['status']): Promise<void> {
-  const docRef = doc(db, ORDERS_COLLECTION, orderId);
-  await updateDoc(docRef, { status });
+  if (!db) return;
+  try {
+    const docRef = doc(db, ORDERS_COLLECTION, orderId);
+    await updateDoc(docRef, { status });
+  } catch (err) {
+    console.warn('Firestore update order status warning:', err);
+  }
 }
 
-/**
- * Subscribe to real-time product updates (instant cross-device sync without refresh).
- */
 export function subscribeToFirestoreProducts(callback: (products: Product[]) => void): () => void {
   try {
+    if (!db) return () => {};
     const colRef = collection(db, PRODUCTS_COLLECTION);
     return onSnapshot(
       colRef,
@@ -164,19 +176,18 @@ export function subscribeToFirestoreProducts(callback: (products: Product[]) => 
         }
       },
       (error) => {
-        console.warn('Real-time sync snapshot error:', error);
+        console.warn('Real-time sync snapshot notice:', error);
       }
     );
-  } catch {
+  } catch (err) {
+    console.warn('subscribeToFirestoreProducts catch:', err);
     return () => {};
   }
 }
 
-/**
- * Subscribe to real-time order updates.
- */
 export function subscribeToFirestoreOrders(callback: (orders: Order[]) => void): () => void {
   try {
+    if (!db) return () => {};
     const colRef = collection(db, ORDERS_COLLECTION);
     return onSnapshot(
       colRef,
@@ -186,10 +197,11 @@ export function subscribeToFirestoreOrders(callback: (orders: Order[]) => void):
         callback(items);
       },
       (error) => {
-        console.warn('Real-time order snapshot error:', error);
+        console.warn('Real-time order snapshot notice:', error);
       }
     );
-  } catch {
+  } catch (err) {
+    console.warn('subscribeToFirestoreOrders catch:', err);
     return () => {};
   }
 }

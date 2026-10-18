@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Product, CartItem, Order } from './utils/ecommerce';
+import { initialProducts } from './utils/ecommerce';
 import { fetchProducts, subscribeToFirestoreProducts } from './services/api';
 import { Storefront } from './components/Storefront';
 import { CartDrawer } from './components/CartDrawer';
@@ -8,8 +9,17 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { Toast, type ToastData } from './components/Toast';
 
 export default function App() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const saved = localStorage.getItem('ishq_products_cache_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return initialProducts;
+  });
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const [activeCategory, setActiveCategory] = useState<string>('All');
@@ -71,15 +81,13 @@ export default function App() {
 
   // Dynamic live catalog fetching & real-time cloud synchronization
   const loadLiveProducts = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
     try {
       const live = await fetchProducts(activeCategory, searchQuery);
-      setProducts(live);
+      if (live && live.length > 0) {
+        setProducts(live);
+      }
     } catch (err: any) {
-      setError(err.message || 'Unable to connect to live product database');
-    } finally {
-      setIsLoading(false);
+      console.warn('Live products fetch notice:', err);
     }
   }, [activeCategory, searchQuery]);
 
