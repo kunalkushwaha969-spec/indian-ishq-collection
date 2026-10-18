@@ -63,8 +63,8 @@ const hmrSilencerPlugin: Plugin = {
 
 export default defineConfig(({ command }) => {
   return {
-    // In production build (e.g. GitHub Pages), use repository subpath or custom domain base. In dev, serve from root.
-    base: command === 'build' ? (process.env.VITE_BASE || '/indian-ishq-collection/') : '/',
+    // Serve from root by default for clean Cloud Run and custom domain asset resolution
+    base: process.env.VITE_BASE || '/',
     plugins: [hmrSilencerPlugin, react(), tailwindcss()],
     resolve: {
       alias: {
