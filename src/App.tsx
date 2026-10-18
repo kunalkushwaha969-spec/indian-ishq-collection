@@ -1,7 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Product, CartItem, Order } from './utils/ecommerce';
 import { initialProducts } from './utils/ecommerce';
-import { fetchProducts, subscribeToFirestoreProducts } from './services/api';
+import {
+  fetchProducts,
+  subscribeToFirestoreProducts,
+  subscribeToFirestoreOrders,
+  getStoredToken,
+} from './services/api';
 import { Storefront } from './components/Storefront';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
@@ -59,7 +64,16 @@ export default function App() {
   });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
 
-  // Store Theme & Custom Cover Photo state
+  // Check if current user is an authenticated Merchant
+  const [isMerchantAuthenticated, setIsMerchantAuthenticated] = useState<boolean>(() => {
+    return !!getStoredToken() || window.location.hash === '#admin';
+  });
+
+  useEffect(() => {
+    setIsMerchantAuthenticated(!!getStoredToken() || isAdminOpen);
+  }, [isAdminOpen, isCustomizerOpen]);
+
+  // Store Theme (Accessible to all users)
   const [theme, setTheme] = useState<StoreTheme>(() => {
     try {
       const saved = localStorage.getItem('ishq_theme');
@@ -69,6 +83,7 @@ export default function App() {
     }
   });
 
+  // Custom Cover Photo (Editable ONLY by Merchant)
   const [coverPhoto, setCoverPhoto] = useState<string>(() => {
     try {
       return localStorage.getItem('ishq_cover_photo') || '';
@@ -77,14 +92,10 @@ export default function App() {
     }
   });
 
-  const [unreadOrders, setUnreadOrders] = useState<Order[]>(() => {
-    try {
-      const saved = localStorage.getItem('ishq_unread_orders');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  // Live Order Notification state for Merchant
+  const [unreadOrdersCount, setUnreadOrdersCount] = useState<number>(0);
+  const knownOrderIdsRef = useRef<Set<string>>(new Set());
+  const initialOrdersLoadedRef = useRef<boolean>(false);
 
   // In-app Notification / Toast state
   const [toast, setToast] = useState<ToastData | null>(null);
@@ -97,37 +108,8 @@ export default function App() {
     }
   }, []);
 
-  // Dynamically apply selected Color Palette to CSS variables
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty('--wine', theme.wine);
-    root.style.setProperty('--wine2', theme.wine2);
-    root.style.setProperty('--rose', theme.rose);
-    root.style.setProperty('--cream', theme.cream);
-    root.style.setProperty('--gold', theme.gold);
-    try {
-      localStorage.setItem('ishq_theme', JSON.stringify(theme));
-    } catch {}
-  }, [theme]);
-
-  // Dynamically apply Merchant's Cover Photo to the Hero section image
-  useEffect(() => {
-    if (!coverPhoto) return;
-    try {
-      localStorage.setItem('ishq_cover_photo', coverPhoto);
-    } catch {}
-
-    const timer = setTimeout(() => {
-      const imgs = document.querySelectorAll('section img, header img');
-      if (imgs.length > 0) {
-        (imgs[0] as HTMLImageElement).src = coverPhoto;
-      }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [coverPhoto, products, isAdminOpen]);
-
-  // Notification sound for new orders
-  const playOrderChime = () => {
+  // Notification sound for new incoming orders
+  const playOrderChime = useCallback(() => {
     try {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new AudioCtx();
@@ -143,7 +125,70 @@ export default function App() {
       osc.start();
       osc.stop(ctx.currentTime + 0.6);
     } catch {}
-  };
+  }, []);
+
+  // Apply Color Palette to CSS variables
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--wine', theme.wine);
+    root.style.setProperty('--wine2', theme.wine2);
+    root.style.setProperty('--rose', theme.rose);
+    root.style.setProperty('--cream', theme.cream);
+    root.style.setProperty('--gold', theme.gold);
+    try {
+      localStorage.setItem('ishq_theme', JSON.stringify(theme));
+    } catch {}
+  }, [theme]);
+
+  // Apply Merchant's Cover Photo to the Hero section image
+  useEffect(() => {
+    if (!coverPhoto) return;
+    try {
+      localStorage.setItem('ishq_cover_photo', coverPhoto);
+    } catch {}
+
+    const timer = setTimeout(() => {
+      const imgs = document.querySelectorAll('section img, header img');
+      if (imgs.length > 0) {
+        (imgs[0] as HTMLImageElement).src = coverPhoto;
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [coverPhoto, products, isAdminOpen]);
+
+  // Real-time Firestore Orders Listener for Merchant Notifications
+  useEffect(() => {
+    const unsubscribeOrders = subscribeToFirestoreOrders((liveOrders) => {
+      if (!initialOrdersLoadedRef.current) {
+        liveOrders.forEach((o) => knownOrderIdsRef.current.add(o.id));
+        initialOrdersLoadedRef.current = true;
+        return;
+      }
+
+      const brandNewOrders = liveOrders.filter((o) => !knownOrderIdsRef.current.has(o.id));
+      if (brandNewOrders.length > 0) {
+        brandNewOrders.forEach((o) => knownOrderIdsRef.current.add(o.id));
+        setUnreadOrdersCount((prev) => prev + brandNewOrders.length);
+        playOrderChime();
+
+        if ( getStoredToken() || isAdminOpen ) {
+          const latest = brandNewOrders[0];
+          showToast({
+            type: 'order',
+            title: '🔔 New Customer Order Received!',
+            message: `Order #${latest.id} (₹${latest.total.toLocaleString('en-IN')}) from ${latest.customer_details.name}`,
+            actionLabel: 'Open Orders',
+            onAction: () => {
+              setIsAdminOpen(true);
+              setUnreadOrdersCount(0);
+            },
+          });
+        }
+      }
+    });
+
+    return () => unsubscribeOrders();
+  }, [isAdminOpen, playOrderChime, showToast]);
 
   // Auto-dismiss toast after 3.8s
   useEffect(() => {
@@ -154,7 +199,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Listen for hash changes (e.g. user goes to #admin)
+  // Listen for hash changes
   useEffect(() => {
     const handleHashChange = () => {
       if (window.location.hash === '#admin') {
@@ -187,7 +232,6 @@ export default function App() {
   useEffect(() => {
     loadLiveProducts();
 
-    // Instant multi-device sync: any stock or product update on mobile/admin reflects live
     const unsubscribe = subscribeToFirestoreProducts((liveItems) => {
       let filtered = [...liveItems];
       if (activeCategory && activeCategory !== 'All') {
@@ -209,7 +253,7 @@ export default function App() {
     return () => unsubscribe();
   }, [activeCategory, searchQuery, loadLiveProducts]);
 
-  // Upload Cover Photo from Phone Gallery
+  // Upload Cover Photo (Merchant Only)
   const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -220,14 +264,14 @@ export default function App() {
         showToast({
           type: 'info',
           title: 'Cover Photo Updated ✨',
-          message: 'New cover photo applied to the storefront hero section.',
+          message: 'New cover photo applied to the storefront hero banner.',
         });
       }
     };
     reader.readAsDataURL(file);
   };
 
-  // Cart operations with instant in-app toast feedback
+  // Cart operations
   const handleAddToCart = (product: Product) => {
     if (product.stock <= 0) {
       showToast({
@@ -313,24 +357,23 @@ export default function App() {
     });
   };
 
-  // Instant order confirmation alert + sound + unread badge for Merchant
+  // Instant order confirmation alert
   const handleOrderSuccess = (order: Order) => {
     setCart([]);
-    loadLiveProducts(); // refresh inventory stock
+    loadLiveProducts();
     playOrderChime();
-
-    const updatedUnread = [order, ...unreadOrders];
-    setUnreadOrders(updatedUnread);
-    try {
-      localStorage.setItem('ishq_unread_orders', JSON.stringify(updatedUnread));
-    } catch {}
+    knownOrderIdsRef.current.add(order.id);
+    setUnreadOrdersCount((prev) => prev + 1);
 
     showToast({
       type: 'order',
       title: 'Order Confirmed! 🎉',
       message: `Order #${order.id} (₹${order.total.toLocaleString('en-IN')}) placed successfully for ${order.customer_details.name}. Preparing your handcrafted outfit!`,
       actionLabel: 'Merchant Workspace',
-      onAction: () => setIsAdminOpen(true),
+      onAction: () => {
+        setIsAdminOpen(true);
+        setUnreadOrdersCount(0);
+      },
     });
   };
 
@@ -356,45 +399,45 @@ export default function App() {
           });
         }}
         onOpenCart={() => setIsCartOpen(true)}
-        onOpenMerchant={() => setIsAdminOpen(true)}
+        onOpenMerchant={() => {
+          setIsAdminOpen(true);
+          setUnreadOrdersCount(0);
+        }}
         onRetryFetch={loadLiveProducts}
       />
 
-      {/* Merchant Floating Action Bar for Theme, Cover Photo & Order Alerts */}
-      {(isAdminOpen || unreadOrders.length > 0) && (
-        <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2.5 items-end">
-          {unreadOrders.length > 0 && (
-            <button
-              onClick={() => {
-                setIsAdminOpen(true);
-                setUnreadOrders([]);
-                localStorage.removeItem('ishq_unread_orders');
-              }}
-              className="bg-red-600 text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 animate-bounce"
-            >
-              <span>🔔 {unreadOrders.length} New Order{unreadOrders.length > 1 ? 's' : ''}!</span>
-              <span className="underline text-xs">View</span>
-            </button>
-          )}
+      {/* Floating Action Bar: Theme Palette for ALL users + Order Alerts for Merchant */}
+      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2.5 items-end">
+        {unreadOrdersCount > 0 && isMerchantAuthenticated && (
+          <button
+            onClick={() => {
+              setIsAdminOpen(true);
+              setUnreadOrdersCount(0);
+            }}
+            className="bg-red-600 text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 animate-bounce"
+          >
+            <span>🔔 {unreadOrdersCount} New Order{unreadOrdersCount > 1 ? 's' : ''}!</span>
+            <span className="underline text-xs">View in Admin</span>
+          </button>
+        )}
 
-          {isAdminOpen && (
-            <button
-              onClick={() => setIsCustomizerOpen(true)}
-              style={{ backgroundColor: 'var(--wine)' }}
-              className="text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 border border-white/30"
-            >
-              🎨 Theme & Cover Photo
-            </button>
-          )}
-        </div>
-      )}
+        <button
+          onClick={() => setIsCustomizerOpen(true)}
+          style={{ backgroundColor: 'var(--wine)' }}
+          className="text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 border border-white/30"
+        >
+          🎨 {isMerchantAuthenticated ? 'Theme & Cover Photo' : 'Color Theme'}
+        </button>
+      </div>
 
-      {/* Merchant Appearance & Cover Photo Modal */}
+      {/* Theme Palette (All Users) & Cover Photo Uploader (Merchant Only) */}
       {isCustomizerOpen && (
         <div className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3 mb-4">
-              <h3 className="text-lg font-bold text-gray-900">Customize Store & Cover Photo</h3>
+              <h3 className="text-lg font-bold text-gray-900">
+                {isMerchantAuthenticated ? 'Store Theme & Cover Photo' : 'Choose Store Color Theme'}
+              </h3>
               <button
                 onClick={() => setIsCustomizerOpen(false)}
                 className="text-gray-500 hover:text-gray-800 text-xl font-bold px-2"
@@ -403,45 +446,52 @@ export default function App() {
               </button>
             </div>
 
-            {/* 1. Cover Photo Upload */}
-            <div className="mb-6">
-              <label className="block text-sm font-semibold text-gray-800 mb-2">
-                1. Upload Hero Cover Photo (From Phone/PC)
-              </label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleCoverUpload}
-                className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-pink-50 file:text-pink-900 hover:file:bg-pink-100 mb-2"
-              />
-              <input
-                type="url"
-                value={coverPhoto.startsWith('data:') ? '' : coverPhoto}
-                onChange={(e) => setCoverPhoto(e.target.value)}
-                placeholder="Or paste direct image URL here..."
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
-              {coverPhoto && (
-                <div className="mt-2 flex items-center justify-between">
-                  <span className="text-xs text-green-700 font-medium">✓ Custom Cover Photo Active</span>
-                  <button
-                    onClick={() => {
-                      setCoverPhoto('');
-                      localStorage.removeItem('ishq_cover_photo');
-                      window.location.reload();
-                    }}
-                    className="text-xs text-red-600 underline"
-                  >
-                    Reset Default Photo
-                  </button>
+            {/* Cover Photo Upload: ONLY visible to Authenticated Merchant */}
+            {isMerchantAuthenticated && (
+              <div className="mb-6 p-3.5 bg-pink-50/60 border border-pink-200 rounded-xl">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-bold text-gray-900">
+                    📸 Merchant Cover Photo (Hero Banner)
+                  </label>
+                  <span className="text-[11px] bg-pink-900 text-white px-2 py-0.5 rounded-full">
+                    Admin Only
+                  </span>
                 </div>
-              )}
-            </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleCoverUpload}
+                  className="block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-white file:text-pink-900 hover:file:bg-pink-100 mb-2"
+                />
+                <input
+                  type="url"
+                  value={coverPhoto.startsWith('data:') ? '' : coverPhoto}
+                  onChange={(e) => setCoverPhoto(e.target.value)}
+                  placeholder="Or paste direct image URL here..."
+                  className="w-full border bg-white rounded-lg px-3 py-1.5 text-sm"
+                />
+                {coverPhoto && (
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-xs text-green-700 font-medium">✓ Custom Cover Active</span>
+                    <button
+                      onClick={() => {
+                        setCoverPhoto('');
+                        localStorage.removeItem('ishq_cover_photo');
+                        window.location.reload();
+                      }}
+                      className="text-xs text-red-600 underline"
+                    >
+                      Reset Default Photo
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* 2. Color Palette Presets */}
+            {/* Color Palette Presets (Accessible to Everyone) */}
             <div className="mb-6">
               <label className="block text-sm font-semibold text-gray-800 mb-2">
-                2. Select Store Color Palette
+                Select Color Palette
               </label>
               <div className="grid grid-cols-1 gap-2">
                 {THEME_PRESETS.map((preset) => (
@@ -463,10 +513,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* 3. Custom Color Pickers */}
+            {/* Custom Color Pickers (Accessible to Everyone) */}
             <div className="mb-6">
               <label className="block text-sm font-semibold text-gray-800 mb-2">
-                3. Or Pick Custom Colors
+                Custom Colors
               </label>
               <div className="grid grid-cols-3 gap-3 text-center">
                 <div className="border p-2 rounded-lg">
@@ -504,7 +554,7 @@ export default function App() {
               style={{ backgroundColor: 'var(--wine)' }}
               className="w-full text-white py-2.5 rounded-xl font-semibold text-sm"
             >
-              Done
+              Apply Theme
             </button>
           </div>
         </div>
