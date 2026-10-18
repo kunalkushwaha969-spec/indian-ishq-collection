@@ -55,6 +55,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   isOpen,
   onClose,
   onCatalogChanged,
+  onAuthChange,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
