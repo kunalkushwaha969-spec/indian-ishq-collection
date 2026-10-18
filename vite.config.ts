@@ -5,8 +5,8 @@ import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
-    // Serve from root by default for clean Cloud Run and custom domain asset resolution
-    base: process.env.VITE_BASE || '/',
+    // Explicitly set base path for GitHub Pages sub-directory hosting
+    base: '/indian-ishq-collection/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
