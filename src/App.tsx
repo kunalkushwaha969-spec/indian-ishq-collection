@@ -6,6 +6,8 @@ import {
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
   getStoredToken,
+  verifyAdminSession,
+  setStoredToken,
 } from './services/api';
 import { Storefront } from './components/Storefront';
 import { CartDrawer } from './components/CartDrawer';
@@ -72,11 +74,45 @@ const handleMerchantAuthChange = useCallback(
   },
   []
 );
-
 useEffect(() => {
-  setIsMerchantAuthenticated(!!getStoredToken());
-}, []);
+  let cancelled = false;
 
+  const restoreMerchantSession = async () => {
+    try {
+      const token = getStoredToken();
+
+      if (!token) {
+        if (!cancelled) {
+          setIsMerchantAuthenticated(false);
+        }
+        return;
+      }
+
+      const valid = await verifyAdminSession(token);
+
+      if (cancelled) return;
+
+      setIsMerchantAuthenticated(valid);
+
+      if (!valid) {
+        setStoredToken(null);
+      }
+    } catch (error) {
+      if (cancelled) return;
+
+      console.error('Merchant session verification failed:', error);
+
+      setIsMerchantAuthenticated(false);
+      setStoredToken(null);
+    }
+  };
+
+  restoreMerchantSession();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
   const [theme, setTheme] = useState<StoreTheme>(() => {
     try {
       const saved = localStorage.getItem('ishq_theme');
