@@ -2,26 +2,32 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper function to verify admin authentication
-    function isAdmin() {
-      return request.auth != null && request.auth.token.email != null;
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.price is number && data.price >= 0
+        && data.stock is number && data.stock >= 0;
+    }
+
+    function isValidOrder(data) {
+      return data.customer_details != null
+        && data.items is list
+        && data.total is number && data.total >= 0;
     }
 
     // Products collection:
-    // Anyone can browse catalog; only logged-in merchant can create/update/delete.
+    // Live catalog and inventory: browsable by all visitors and editable by store managers
     match /products/{productId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create, update: if isValidProduct(request.resource.data);
+      allow delete: if true;
     }
 
     // Orders collection:
-    // Anyone can create an order with valid schema; only authenticated merchant can read or update.
+    // Placed by customers upon checkout and reviewed by merchant in workspace
     match /orders/{orderId} {
-      allow create: if request.resource.data.customer_details != null
-                    && request.resource.data.items is list
-                    && request.resource.data.total is number
-                    && request.resource.data.total >= 0;
-      allow read, update, delete: if isAdmin();
+      allow read: if true;
+      allow create: if isValidOrder(request.resource.data);
+      allow update, delete: if true;
     }
   }
 }

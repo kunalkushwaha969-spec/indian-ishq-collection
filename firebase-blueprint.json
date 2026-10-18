@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "An ethnic wear product in the Indian Ishq store catalog.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique product identifier" },
+        "name": { "type": "string", "description": "Product display name" },
+        "category": { "type": "string", "description": "Category name, e.g. Kurtis, Sarees, Festive, Suits" },
+        "price": { "type": "number", "description": "Selling price in INR" },
+        "old_price": { "type": "number", "description": "Original MRP price in INR" },
+        "stock": { "type": "number", "description": "Available inventory count" },
+        "image_url": { "type": "string", "description": "Product image URL" },
+        "tag": { "type": "string", "description": "Display badge like BESTSELLER, NEW" },
+        "fabric": { "type": "string", "description": "Fabric and craftsmanship description" },
+        "created_at": { "type": "string", "description": "ISO timestamp of creation" }
+      },
+      "required": ["id", "name", "category", "price", "stock", "image_url"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer order with items, shipping details, and payment information.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Order reference ID, e.g. IIC-123456" },
+        "customer_details": {
+          "type": "object",
+          "description": "Customer contact and shipping address details"
+        },
+        "items": {
+          "type": "array",
+          "description": "List of ordered items with quantities"
+        },
+        "payment_method": { "type": "string", "description": "UPI or COD" },
+        "upi_ref_id": { "type": "string", "description": "UPI transaction reference ID if applicable" },
+        "status": { "type": "string", "description": "Order status: Confirmed, Packed, Shipped, Delivered, Cancelled" },
+        "total": { "type": "number", "description": "Order total in INR" },
+        "created_at": { "type": "string", "description": "ISO timestamp of order creation" }
+      },
+      "required": ["id", "customer_details", "items", "payment_method", "status", "total"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Store collection of ethnic wear products and real-time inventory"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Store customer orders and fulfillment status"
+    }
+  }
+}

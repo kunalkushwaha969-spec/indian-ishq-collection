@@ -11,6 +11,8 @@ import {
   verifyAdminSession,
   getStoredToken,
   setStoredToken,
+  subscribeToFirestoreProducts,
+  subscribeToFirestoreOrders,
 } from '../services/api';
 import {
   type MerchantActivity,
@@ -94,6 +96,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       checkAuth();
     }
   }, [isOpen]);
+
+  // Real-time synchronization across devices (updates instantly when modified on phone or laptop)
+  useEffect(() => {
+    if (!isOpen || !isAuthenticated) return;
+    const unsubProds = subscribeToFirestoreProducts((items) => {
+      if (items && items.length > 0) {
+        setProducts(items);
+      }
+    });
+    const unsubOrds = subscribeToFirestoreOrders((ords) => {
+      setOrders(ords);
+    });
+    return () => {
+      unsubProds();
+      unsubOrds();
+    };
+  }, [isOpen, isAuthenticated]);
 
   const loadData = async () => {
     setIsLoadingData(true);

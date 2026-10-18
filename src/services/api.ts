@@ -1,5 +1,17 @@
 import type { Product, Order, CustomerDetails, OrderItem } from '../utils/ecommerce';
-import { initialProducts, initialOrders } from '../utils/ecommerce';
+import { initialProducts, initialOrders, formatINR } from '../utils/ecommerce';
+import {
+  fetchFirestoreProducts,
+  saveFirestoreProduct,
+  updateFirestoreProductStock,
+  deleteFirestoreProduct,
+  fetchFirestoreOrders,
+  saveFirestoreOrder,
+  updateFirestoreOrderStatus,
+  subscribeToFirestoreProducts,
+  subscribeToFirestoreOrders,
+} from './firebase';
+export { subscribeToFirestoreProducts, subscribeToFirestoreOrders };
 import {
   getEffectiveSupabaseUrl,
   getEffectiveSupabaseKey,
@@ -178,7 +190,7 @@ export function resetCloudCircuit() {
 async function httpFetch(
   url: string,
   options: RequestInit = {},
-  timeoutMs = 1800
+  timeoutMs = 8000
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -275,63 +287,43 @@ export async function testSupabaseConnection(
   }
 }
 
-// 1. Fetch live products via standard REST/HTTP GET
+// 1. Fetch live products from cloud database
 export async function fetchProducts(
   category = 'All',
   searchQuery = ''
 ): Promise<Product[]> {
-  const supabaseUrl = getEffectiveSupabaseUrl();
-
-  // A. Attempt direct Supabase PostgREST HTTP GET if not unresolvable placeholder and circuit is clear
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    const isResolvable = await isHostResolvable(supabaseUrl);
-    if (!isResolvable) {
-      tripCloudCircuit('DNS unresolvable / project paused');
-    } else {
-      try {
-        const params = new URLSearchParams();
-        params.set('select', '*');
-        if (category && category !== 'All') {
-          params.set('category', `eq.${category}`);
-        }
-        if (searchQuery.trim()) {
-          params.set('name', `ilike.%${searchQuery.trim()}%`);
-        }
-        params.set('order', 'created_at.desc');
-
-        const res = await httpFetch(
-          `${getSupabaseRestUrl()}/products?${params.toString()}`,
-          {
-            method: 'GET',
-            headers: getSupabaseHeaders(),
-          },
-          1800
-        );
-
-        if (res.ok) {
-          resetCloudCircuit();
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            setLocalProducts(data as Product[]);
-            return data as Product[];
-          }
-        } else {
-          resetCloudCircuit();
-        }
-      } catch (err: any) {
-        tripCloudCircuit(err.message || 'DNS unresolvable');
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    const firestoreItems = await fetchFirestoreProducts();
+    if (firestoreItems && firestoreItems.length > 0) {
+      setLocalProducts(firestoreItems);
+      let filtered = [...firestoreItems];
+      if (category && category !== 'All') {
+        filtered = filtered.filter((p) => p.category.toLowerCase() === category.toLowerCase());
       }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        filtered = filtered.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            (p.fabric && p.fabric.toLowerCase().includes(q)) ||
+            (p.tag && p.tag.toLowerCase().includes(q))
+        );
+      }
+      return filtered;
     }
+  } catch (err) {
+    console.warn('Firestore fetch products failed, trying backend fallback:', err);
   }
 
-  // B. Attempt Backend REST API only if NOT on a purely static host like GitHub Pages
+  // B. Secondary Backend REST API fallback
   if (!isStaticHost()) {
     try {
       const backendParams = new URLSearchParams();
       if (category && category !== 'All') backendParams.set('category', category);
       if (searchQuery.trim()) backendParams.set('q', searchQuery.trim());
 
-      const backendRes = await httpFetch(`/api/products?${backendParams.toString()}`, {}, 1200);
+      const backendRes = await httpFetch(`/api/products?${backendParams.toString()}`);
       if (backendRes.ok) {
         const result = await backendRes.json();
         if (result.products && result.products.length > 0) {
@@ -342,7 +334,7 @@ export async function fetchProducts(
     } catch {}
   }
 
-  // C. Resilient Static / GitHub Pages fallback
+  // C. Resilient Local Storage fallback
   const localList = getLocalProducts();
   let filtered = [...localList];
 
@@ -384,49 +376,16 @@ export async function createProduct(
   };
 
   let createdProduct: Product | null = null;
-  const supabaseUrl = getEffectiveSupabaseUrl();
 
-  // A. Attempt direct Supabase PostgREST HTTP POST
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    try {
-      let res = await httpFetch(
-        `${getSupabaseRestUrl()}/products`,
-        {
-          method: 'POST',
-          headers: getSupabaseHeaders(),
-          body: JSON.stringify([productRecord]),
-        },
-        2200
-      );
-
-      // If failed due to column mismatch (e.g. existing table missing 'fabric' column), retry with core columns
-      if (!res.ok && (res.status === 400 || res.status === 404)) {
-        const { fabric, ...coreRecord } = productRecord;
-        res = await httpFetch(
-          `${getSupabaseRestUrl()}/products`,
-          {
-            method: 'POST',
-            headers: getSupabaseHeaders(),
-            body: JSON.stringify([coreRecord]),
-          },
-          2000
-        );
-      }
-
-      if (res.ok) {
-        resetCloudCircuit();
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          createdProduct = data[0] as Product;
-        }
-      }
-    } catch (err: any) {
-      tripCloudCircuit(err.message || 'DNS unresolvable');
-    }
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    createdProduct = await saveFirestoreProduct(productRecord);
+  } catch (err) {
+    console.warn('Firestore product creation warning:', err);
   }
 
-  // B. Attempt Backend REST API only if not static host
-  if (!createdProduct && !isStaticHost()) {
+  // B. Attempt Backend REST API
+  if (!isStaticHost()) {
     try {
       const token = getStoredToken();
       const backendRes = await httpFetch('/api/products', {
@@ -436,16 +395,16 @@ export async function createProduct(
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(product),
-      }, 1500);
+      });
 
       if (backendRes.ok) {
         const data = await backendRes.json();
-        createdProduct = data.product as Product;
+        if (!createdProduct) createdProduct = data.product as Product;
       }
     } catch {}
   }
 
-  // C. Fallback: Save to Local Storage Cache (GitHub Pages compatible)
+  // C. Fallback: Save to Local Storage Cache
   if (!createdProduct) {
     createdProduct = productRecord;
   }
@@ -463,41 +422,22 @@ export async function createProduct(
   return createdProduct;
 }
 
-// 3. Update stock via standard REST/HTTP PATCH
+// 3. Update stock via Firestore cloud database
 export async function updateProductStock(
   id: string,
   stock: number
 ): Promise<Product> {
   let updatedProduct: Product | null = null;
-  const supabaseUrl = getEffectiveSupabaseUrl();
 
-  // A. Attempt Supabase PostgREST HTTP PATCH
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    try {
-      const res = await httpFetch(
-        `${getSupabaseRestUrl()}/products?id=eq.${id}`,
-        {
-          method: 'PATCH',
-          headers: getSupabaseHeaders(),
-          body: JSON.stringify({ stock }),
-        },
-        1800
-      );
-
-      if (res.ok) {
-        resetCloudCircuit();
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          updatedProduct = data[0] as Product;
-        }
-      }
-    } catch (err: any) {
-      tripCloudCircuit(err.message || 'DNS unresolvable');
-    }
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    await updateFirestoreProductStock(id, stock);
+  } catch (err) {
+    console.warn('Firestore stock update warning:', err);
   }
 
-  // B. Attempt Backend REST API only if not static host
-  if (!updatedProduct && !isStaticHost()) {
+  // B. Attempt Backend REST API
+  if (!isStaticHost()) {
     try {
       const token = getStoredToken();
       const backendRes = await httpFetch(`/api/products/${id}/stock`, {
@@ -507,7 +447,7 @@ export async function updateProductStock(
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ stock }),
-      }, 1500);
+      });
 
       if (backendRes.ok) {
         const data = await backendRes.json();
@@ -543,35 +483,23 @@ export async function updateProductStock(
   return updatedProduct;
 }
 
-// 4. Delete product via standard REST/HTTP DELETE
+// 4. Delete product from Firestore cloud database
 export async function deleteProduct(id: string): Promise<void> {
-  const supabaseUrl = getEffectiveSupabaseUrl();
-
-  // A. Attempt Supabase PostgREST HTTP DELETE
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    try {
-      const res = await httpFetch(
-        `${getSupabaseRestUrl()}/products?id=eq.${id}`,
-        {
-          method: 'DELETE',
-          headers: getSupabaseHeaders(),
-        },
-        1500
-      );
-      if (res.ok) resetCloudCircuit();
-    } catch (err: any) {
-      tripCloudCircuit(err.message || 'DNS unresolvable');
-    }
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    await deleteFirestoreProduct(id);
+  } catch (err) {
+    console.warn('Firestore delete warning:', err);
   }
 
-  // B. Attempt Backend REST API only if not static host
+  // B. Attempt Backend REST API
   if (!isStaticHost()) {
     try {
       const token = getStoredToken();
       await httpFetch(`/api/products/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
-      }, 1500);
+      });
     } catch {}
   }
 
@@ -586,18 +514,19 @@ export async function deleteProduct(id: string): Promise<void> {
   });
 }
 
-// 5. Create Order via standard REST/HTTP POST
+
+// 5. Create Order via Firestore cloud database
 export async function createOrder(payload: {
   customer_details: CustomerDetails;
   items: OrderItem[];
-  payment_method: 'COD' | 'UPI';
+  payment_method: 'UPI' | 'COD';
   upi_ref_id?: string;
   total: number;
 }): Promise<Order> {
   const orderId = 'IIC-' + Math.floor(100000 + Math.random() * 900000);
   const now = new Date().toISOString();
 
-  const orderRecord: Order = {
+  const newOrder: Order = {
     id: orderId,
     customer_details: payload.customer_details,
     items: payload.items,
@@ -609,66 +538,53 @@ export async function createOrder(payload: {
   };
 
   let placedOrder: Order | null = null;
-  const supabaseUrl = getEffectiveSupabaseUrl();
 
-  // A. Attempt Supabase PostgREST HTTP POST
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    try {
-      const res = await httpFetch(
-        `${getSupabaseRestUrl()}/orders`,
-        {
-          method: 'POST',
-          headers: getSupabaseHeaders(),
-          body: JSON.stringify([orderRecord]),
-        },
-        2000
-      );
-
-      if (res.ok) {
-        resetCloudCircuit();
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          placedOrder = data[0] as Order;
-        }
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    placedOrder = await saveFirestoreOrder(newOrder);
+    // Decrement stock in Firestore cloud database
+    for (const item of payload.items) {
+      const currentProducts = await fetchFirestoreProducts();
+      const prod = currentProducts.find((p) => p.id === item.id);
+      if (prod) {
+        const nextStock = Math.max(0, prod.stock - item.qty);
+        await updateFirestoreProductStock(item.id, nextStock);
       }
-    } catch (err: any) {
-      tripCloudCircuit(err.message || 'DNS unresolvable');
     }
+  } catch (err) {
+    console.warn('Firestore order placement warning:', err);
   }
 
-  // B. Attempt Backend REST API only if not static host
-  if (!placedOrder && !isStaticHost()) {
+  // B. Attempt Backend REST API
+  if (!isStaticHost()) {
     try {
       const backendRes = await httpFetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      }, 1500);
+      });
 
       if (backendRes.ok) {
         const data = await backendRes.json();
-        placedOrder = data.order as Order;
+        if (!placedOrder) placedOrder = data.order as Order;
       }
     } catch {}
   }
 
-  // C. Fallback: Save to Local Storage Cache
   if (!placedOrder) {
-    placedOrder = orderRecord;
+    placedOrder = newOrder;
   }
 
   const existingOrders = getLocalOrders();
   setLocalOrders([placedOrder, ...existingOrders.filter((o) => o.id !== placedOrder!.id)]);
 
-  // Decrement stock in local cache and sync with Supabase
+  // Decrement stock in local cache
   const products = getLocalProducts();
   payload.items.forEach((item) => {
     const prod = products.find((p) => p.id === item.id);
     if (prod) {
       const newStock = Math.max(0, prod.stock - item.qty);
       prod.stock = newStock;
-      // Sync decremented inventory count to cloud database
-      updateProductStock(item.id, newStock).catch(() => {});
     }
   });
   setLocalProducts(products);
@@ -682,33 +598,17 @@ export async function createOrder(payload: {
   return placedOrder;
 }
 
-// 6. Fetch Orders via standard REST/HTTP GET
+// 6. Fetch Orders via Firestore cloud database
 export async function fetchOrders(): Promise<Order[]> {
-  const supabaseUrl = getEffectiveSupabaseUrl();
-
-  // A. Attempt Supabase PostgREST HTTP GET
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    try {
-      const res = await httpFetch(
-        `${getSupabaseRestUrl()}/orders?select=*&order=created_at.desc`,
-        {
-          method: 'GET',
-          headers: getSupabaseHeaders(),
-        },
-        1800
-      );
-
-      if (res.ok) {
-        resetCloudCircuit();
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setLocalOrders(data as Order[]);
-          return data as Order[];
-        }
-      }
-    } catch (err: any) {
-      tripCloudCircuit(err.message || 'DNS unresolvable');
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    const list = await fetchFirestoreOrders();
+    if (list && list.length > 0) {
+      setLocalOrders(list);
+      return list;
     }
+  } catch (err) {
+    console.warn('Firestore fetch orders warning:', err);
   }
 
   // B. Attempt Backend REST API only if not static host
@@ -717,7 +617,7 @@ export async function fetchOrders(): Promise<Order[]> {
       const token = getStoredToken();
       const backendRes = await httpFetch('/api/orders', {
         headers: { Authorization: `Bearer ${token}` },
-      }, 1200);
+      });
 
       if (backendRes.ok) {
         const data = await backendRes.json();
@@ -733,41 +633,22 @@ export async function fetchOrders(): Promise<Order[]> {
   return getLocalOrders();
 }
 
-// 7. Update Order Status via standard REST/HTTP PATCH
+// 7. Update Order Status in Firestore cloud database
 export async function updateOrderStatus(
   orderId: string,
   status: Order['status']
 ): Promise<Order> {
   let updatedOrder: Order | null = null;
-  const supabaseUrl = getEffectiveSupabaseUrl();
 
-  // A. Attempt Supabase PostgREST HTTP PATCH
-  if (!isPlaceholderSupabaseUrl(supabaseUrl) && isCloudCircuitActive()) {
-    try {
-      const res = await httpFetch(
-        `${getSupabaseRestUrl()}/orders?id=eq.${orderId}`,
-        {
-          method: 'PATCH',
-          headers: getSupabaseHeaders(),
-          body: JSON.stringify({ status }),
-        },
-        1800
-      );
-
-      if (res.ok) {
-        resetCloudCircuit();
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          updatedOrder = data[0] as Order;
-        }
-      }
-    } catch (err: any) {
-      tripCloudCircuit(err.message || 'DNS unresolvable');
-    }
+  // A. Primary Cloud Database: Google Cloud Firestore
+  try {
+    await updateFirestoreOrderStatus(orderId, status);
+  } catch (err) {
+    console.warn('Firestore update order status warning:', err);
   }
 
   // B. Attempt Backend REST API only if not static host
-  if (!updatedOrder && !isStaticHost()) {
+  if (!isStaticHost()) {
     try {
       const token = getStoredToken();
       const backendRes = await httpFetch(`/api/orders/${orderId}/status`, {
@@ -777,7 +658,7 @@ export async function updateOrderStatus(
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ status }),
-      }, 1500);
+      });
 
       if (backendRes.ok) {
         const data = await backendRes.json();

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Product, CartItem, Order } from './utils/ecommerce';
-import { fetchProducts } from './services/api';
+import { fetchProducts, subscribeToFirestoreProducts } from './services/api';
 import { Storefront } from './components/Storefront';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
@@ -69,7 +69,7 @@ export default function App() {
     } catch (e) {}
   }, [cart]);
 
-  // Dynamic live catalog fetching
+  // Dynamic live catalog fetching & real-time cloud synchronization
   const loadLiveProducts = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -85,7 +85,28 @@ export default function App() {
 
   useEffect(() => {
     loadLiveProducts();
-  }, [loadLiveProducts]);
+
+    // Instant multi-device sync: any stock or product update on mobile/admin reflects live
+    const unsubscribe = subscribeToFirestoreProducts((liveItems) => {
+      let filtered = [...liveItems];
+      if (activeCategory && activeCategory !== 'All') {
+        filtered = filtered.filter((p) => p.category.toLowerCase() === activeCategory.toLowerCase());
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        filtered = filtered.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            (p.fabric && p.fabric.toLowerCase().includes(q)) ||
+            (p.tag && p.tag.toLowerCase().includes(q))
+        );
+      }
+      setProducts(filtered);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [activeCategory, searchQuery, loadLiveProducts]);
 
   // Cart operations with instant in-app toast feedback
   const handleAddToCart = (product: Product) => {
