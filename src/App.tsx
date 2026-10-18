@@ -63,13 +63,22 @@ export default function App() {
   });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
 
-  const [isMerchantAuthenticated, setIsMerchantAuthenticated] = useState<boolean>(() => {
-    return !!getStoredToken() || window.location.hash === '#admin';
-  });
+  const [isMerchantAuthenticated, setIsMerchantAuthenticated] =
+  useState<boolean>(() => !!getStoredToken());
 
-  useEffect(() => {
-    setIsMerchantAuthenticated(!!getStoredToken() || isAdminOpen);
-  }, [isAdminOpen, isCustomizerOpen]);
+useEffect(() => {
+  const checkAuth = () => {
+    setIsMerchantAuthenticated(!!getStoredToken());
+  };
+
+  checkAuth();
+
+  window.addEventListener('storage', checkAuth);
+
+  return () => {
+    window.removeEventListener('storage', checkAuth);
+  };
+}, [isAdminOpen]);
 
   const [theme, setTheme] = useState<StoreTheme>(() => {
     try {
