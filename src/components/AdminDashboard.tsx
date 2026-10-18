@@ -48,6 +48,7 @@ interface AdminDashboardProps {
   isOpen: boolean;
   onClose: () => void;
   onCatalogChanged: () => void;
+  onAuthChange: (authenticated: boolean) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -140,8 +141,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     setLoginError(null);
     try {
-      await loginAdmin(password, email);
+     await loginAdmin(password, email);
       setIsAuthenticated(true);
+      onAuthChange(true);
       loadData();
     } catch (err: any) {
       setLoginError(err.message || 'Unauthorized: Invalid password or admin email');
@@ -151,6 +153,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleLogout = () => {
     setStoredToken(null);
     setIsAuthenticated(false);
+    onAuthChange(false);
   };
 
   const handleStockChange = async (id: string, newStock: number) => {
