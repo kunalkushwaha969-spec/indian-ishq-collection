@@ -29,5 +29,18 @@ service cloud.firestore {
       allow create: if isValidOrder(request.resource.data);
       allow update, delete: if true;
     }
+
+    // Store Settings collection:
+    // Brand identity, contact details, business hours, social links, policies, UPI VPA, and payment methods
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.storeName is string
+        && request.resource.data.storeName.size() > 0
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() > 0
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0;
+      allow delete: if false;
+    }
   }
 }

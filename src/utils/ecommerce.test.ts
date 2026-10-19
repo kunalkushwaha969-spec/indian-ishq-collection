@@ -125,3 +125,135 @@ test('formatINR formats currency strings with rupee sign', () => {
   assert.equal(formatINR(1899), '₹1,899');
   assert.equal(formatINR(25000), '₹25,000');
 });
+
+import {
+  COORDINATED_THEMES,
+  resolveThemeById,
+  resolveAppearanceMode,
+} from './themes.ts';
+
+test('COORDINATED_THEMES defines all 6 required boutique colour themes with light and dark tokens', () => {
+  assert.equal(COORDINATED_THEMES.length, 6);
+  const ids = COORDINATED_THEMES.map((t) => t.id);
+  assert.deepEqual(ids, ['burgundy', 'plum', 'emerald', 'rose', 'terracotta', 'ivory']);
+
+  for (const theme of COORDINATED_THEMES) {
+    assert.ok(theme.light.primary);
+    assert.ok(theme.light.bg);
+    assert.ok(theme.dark.primary);
+    assert.ok(theme.dark.bg);
+    assert.notEqual(theme.light.bg, theme.dark.bg);
+  }
+});
+
+test('resolveThemeById resolves valid theme IDs, legacy objects, and falls back to Elegant Burgundy', () => {
+  assert.equal(resolveThemeById('emerald').id, 'emerald');
+  assert.equal(resolveThemeById('plum').id, 'plum');
+  assert.equal(resolveThemeById(JSON.stringify({ name: 'Emerald Maharani' })).id, 'emerald');
+  assert.equal(resolveThemeById('unknown-theme').id, 'burgundy');
+  assert.equal(resolveThemeById(null).id, 'burgundy');
+});
+
+test('resolveAppearanceMode prioritizes explicit manual choice over system preference', () => {
+  // No manual preference -> follow system
+  assert.equal(resolveAppearanceMode(null, true), 'dark');
+  assert.equal(resolveAppearanceMode(null, false), 'light');
+  assert.equal(resolveAppearanceMode(undefined, true), 'dark');
+
+  // Explicit manual preference overrides system
+  assert.equal(resolveAppearanceMode('light', true), 'light');
+  assert.equal(resolveAppearanceMode('dark', false), 'dark');
+});
+
+import {
+  isRazorpayConfigured,
+  resolveInitialOrderStatus,
+} from './ecommerce.ts';
+
+test('isRazorpayConfigured returns false when credentials are missing or placeholders, and true for valid rzp_ keys', () => {
+  assert.equal(isRazorpayConfigured(''), false);
+  assert.equal(isRazorpayConfigured(null), false);
+  assert.equal(isRazorpayConfigured(undefined), false);
+  assert.equal(isRazorpayConfigured('MY_RAZORPAY_KEY'), false);
+  assert.equal(isRazorpayConfigured('rzp_test_123'), false); // too short
+  assert.equal(isRazorpayConfigured('rzp_test_AbCdEf123456', false), false); // disabled
+  assert.equal(isRazorpayConfigured('rzp_test_AbCdEf123456', true), true);
+  assert.equal(isRazorpayConfigured('rzp_live_9876543210XyZ', true), true);
+});
+
+test('resolveInitialOrderStatus prevents unverified Razorpay orders and sets appropriate status for UPI and COD', () => {
+  assert.equal(resolveInitialOrderStatus('UPI'), 'Pending UPI Payment');
+  assert.equal(resolveInitialOrderStatus('COD'), 'Confirmed');
+  assert.equal(resolveInitialOrderStatus('RAZORPAY', 'pay_Nz123456789'), 'Confirmed');
+
+  assert.throws(() => {
+    resolveInitialOrderStatus('RAZORPAY', '');
+  }, /Verified Razorpay payment ID is required/);
+
+  assert.throws(() => {
+    resolveInitialOrderStatus('RAZORPAY');
+  }, /Verified Razorpay payment ID is required/);
+});
+
+import {
+  DEFAULT_STORE_SETTINGS,
+  mergeAndSanitizeStoreSettings,
+  resolveDefaultPaymentMethod,
+} from './ecommerce.ts';
+
+test('mergeAndSanitizeStoreSettings preserves existing values when incoming fields are blank and updates valid fields', () => {
+  const updated = mergeAndSanitizeStoreSettings(
+    {
+      storeName: '   ', // blank -> should not overwrite existing storeName
+      tagline: 'Handcrafted Royal Heritage Wear',
+      phone: '', // blank -> should preserve fallback phone
+      whatsapp: '919988776655',
+      codEnabled: false,
+      upiEnabled: true,
+      logoUrl: 'https://example.com/logo.png',
+    },
+    DEFAULT_STORE_SETTINGS
+  );
+
+  assert.equal(updated.storeName, DEFAULT_STORE_SETTINGS.storeName);
+  assert.equal(updated.phone, DEFAULT_STORE_SETTINGS.phone);
+  assert.equal(updated.tagline, 'Handcrafted Royal Heritage Wear');
+  assert.equal(updated.whatsapp, '919988776655');
+  assert.equal(updated.codEnabled, false);
+  assert.equal(updated.upiEnabled, true);
+  assert.equal(updated.logoUrl, 'https://example.com/logo.png');
+});
+
+test('resolveDefaultPaymentMethod chooses first enabled payment method', () => {
+  assert.equal(
+    resolveDefaultPaymentMethod({
+      codEnabled: true,
+      upiEnabled: true,
+      razorpayEnabled: false,
+      razorpayKeyId: '',
+    }),
+    'COD'
+  );
+
+  assert.equal(
+    resolveDefaultPaymentMethod({
+      codEnabled: false,
+      upiEnabled: true,
+      razorpayEnabled: false,
+      razorpayKeyId: '',
+    }),
+    'UPI'
+  );
+
+  assert.equal(
+    resolveDefaultPaymentMethod({
+      codEnabled: false,
+      upiEnabled: false,
+      razorpayEnabled: true,
+      razorpayKeyId: 'rzp_test_AbCdEf123456',
+    }),
+    'RAZORPAY'
+  );
+});
+
+

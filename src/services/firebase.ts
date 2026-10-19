@@ -37,7 +37,7 @@ export async function seedFirestoreIfEmpty(): Promise<Product[]> {
   try {
     const prodsRef = collection(db, PRODUCTS_COLLECTION);
     const snap = await getDocs(prodsRef);
-    if (!snap.empty) {
+    if (snap.size > 1) {
       const items: Product[] = [];
       snap.forEach((d) => items.push(d.data() as Product));
       return items;
@@ -46,15 +46,18 @@ export async function seedFirestoreIfEmpty(): Promise<Product[]> {
     if (isSeeding) return [...initialProducts];
     isSeeding = true;
 
+    const existingMap = new Map<string, Product>();
     const batch = writeBatch(db);
     for (const prod of initialProducts) {
       const docRef = doc(db, PRODUCTS_COLLECTION, prod.id);
-      batch.set(docRef, prod);
+      batch.set(docRef, prod, { merge: true });
+      existingMap.set(prod.id, prod);
     }
     await batch.commit();
     isSeeding = false;
-    return [...initialProducts];
+    return Array.from(existingMap.values());
   } catch (err) {
+    isSeeding = false;
     console.warn('Firestore seed notice:', err);
     return [...initialProducts];
   }
@@ -65,7 +68,7 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
   try {
     const q = query(collection(db, PRODUCTS_COLLECTION), orderBy('created_at', 'desc'));
     const snap = await getDocs(q);
-    if (snap.empty) {
+    if (snap.size <= 1) {
       return await seedFirestoreIfEmpty();
     }
     const list: Product[] = [];
@@ -75,7 +78,7 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
     try {
       if (!db) return [...initialProducts];
       const snap = await getDocs(collection(db, PRODUCTS_COLLECTION));
-      if (snap.empty) {
+      if (snap.size <= 1) {
         return await seedFirestoreIfEmpty();
       }
       const list: Product[] = [];
@@ -169,11 +172,13 @@ export function subscribeToFirestoreProducts(callback: (products: Product[]) => 
     return onSnapshot(
       colRef,
       (snap) => {
-        if (!snap.empty) {
-          const items: Product[] = [];
-          snap.forEach((d) => items.push(d.data() as Product));
-          callback(items);
+        if (snap.size <= 1) {
+          seedFirestoreIfEmpty().then((seeded) => callback(seeded));
+          return;
         }
+        const items: Product[] = [];
+        snap.forEach((d) => items.push(d.data() as Product));
+        callback(items);
       },
       (error) => {
         console.warn('Real-time sync snapshot notice:', error);

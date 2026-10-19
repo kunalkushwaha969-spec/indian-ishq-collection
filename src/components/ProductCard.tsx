@@ -1,103 +1,164 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Product } from '../utils/ecommerce';
 import { formatINR } from '../utils/ecommerce';
+import { Heart, ShoppingBag } from 'lucide-react';
 
 interface ProductCardProps {
   product: Product;
   onAddToCart: (product: Product) => void;
   onWishlistClick: (product: Product) => void;
+  onSelectProduct?: (product: Product) => void;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({
   product,
   onAddToCart,
   onWishlistClick,
+  onSelectProduct,
 }) => {
+  const [imgError, setImgError] = useState(false);
   const isOutOfStock = product.stock <= 0;
 
   return (
-    <article className="group bg-white border border-[#eadfda] p-3 transition-all duration-200 hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between">
+    <article
+      className="group rounded-xl border p-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg flex flex-col justify-between"
+      style={{
+        backgroundColor: 'var(--surface)',
+        borderColor: 'var(--border)',
+        color: 'var(--text-main)',
+      }}
+    >
       <div>
-        {/* Product Art Box */}
-        <div className="relative h-64 overflow-hidden bg-[#ead4c7] rounded-sm">
-          {product.image_url ? (
-            <img
-              src={product.image_url}
-              alt={product.name}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              loading="lazy"
-            />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-tr from-[#70283b] to-[#b78a4b] opacity-80 flex items-center justify-center text-white text-xs font-serif italic">
-              {product.category}
-            </div>
-          )}
+        {/* Product Image Container */}
+        <div
+          className="relative aspect-[3/4] w-full overflow-hidden rounded-lg mb-3.5"
+          style={{ backgroundColor: 'var(--surface-elevated)' }}
+        >
+          <button
+            type="button"
+            onClick={() => onSelectProduct?.(product)}
+            aria-label={`View details for ${product.name}`}
+            className="w-full h-full block text-left cursor-pointer focus:outline-none"
+          >
+            {product.image_url && !imgError ? (
+              <img
+                src={product.image_url}
+                alt={product.name}
+                referrerPolicy="no-referrer"
+                onError={() => setImgError(true)}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                loading="lazy"
+              />
+            ) : (
+              <div
+                className="w-full h-full flex flex-col items-center justify-center p-4 text-center"
+                style={{ backgroundColor: 'var(--secondary)', color: 'var(--primary)' }}
+              >
+                <span className="font-serif italic text-base font-medium">{product.name}</span>
+                <span className="text-[11px] uppercase tracking-widest mt-1 opacity-75">
+                  {product.category}
+                </span>
+              </div>
+            )}
+          </button>
 
-          {/* Badge */}
-          <span className="absolute top-2.5 left-2.5 bg-[#fffdf0] text-[#70283b] text-[10px] font-semibold px-2 py-1 tracking-wider uppercase shadow-sm">
-            {product.tag || 'CURATED'}
-          </span>
-
-          {/* Heart button */}
+          {/* Wishlist Button */}
           <button
             type="button"
             onClick={() => onWishlistClick(product)}
-            aria-label={`Add ${product.name} to wishlist`}
-            className="absolute top-2 right-2 bg-white/90 hover:bg-white text-[#70283b] w-8 h-8 rounded-full flex items-center justify-center text-base shadow transition-colors"
+            aria-label={`Save ${product.name} to wishlist`}
+            className="absolute top-3 right-3 w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-transform hover:scale-105 cursor-pointer"
+            style={{
+              backgroundColor: 'var(--surface)',
+              color: 'var(--primary)',
+              border: '1px solid var(--border)',
+            }}
           >
-            ♡
+            <Heart className="w-4 h-4" />
           </button>
 
           {isOutOfStock && (
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] flex items-center justify-center">
-              <span className="bg-[#4c1727] text-white text-xs font-semibold px-3 py-1.5 rounded tracking-widest uppercase">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
+              <span
+                className="text-xs font-semibold px-3.5 py-1.5 rounded tracking-widest uppercase"
+                style={{ backgroundColor: 'var(--primary)', color: 'var(--btn-text)' }}
+              >
                 Sold Out
               </span>
             </div>
           )}
         </div>
 
-        {/* Info */}
-        <h3 className="font-serif text-[17px] text-[#292222] mt-3 mb-1 line-clamp-1 font-medium">
-          {product.name}
+        {/* Clean Unboxed Metadata */}
+        <div
+          className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-medium mb-1"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          <span style={{ color: 'var(--accent)' }}>{product.category}</span>
+          {product.tag && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{product.tag}</span>
+            </>
+          )}
+        </div>
+
+        {/* Product Title */}
+        <h3 className="font-serif text-lg font-semibold leading-snug mb-1 line-clamp-1">
+          <button
+            type="button"
+            onClick={() => onSelectProduct?.(product)}
+            className="text-left hover:underline focus:outline-none cursor-pointer"
+            style={{ color: 'var(--text-main)' }}
+          >
+            {product.name}
+          </button>
         </h3>
 
-        {product.fabric && (
-          <p className="text-[11px] text-[#776c6b] line-clamp-1 mb-2 italic">
-            {product.fabric}
-          </p>
-        )}
+        {/* Fabric Subtitle */}
+        <p
+          className="text-xs line-clamp-1 mb-3"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {product.fabric || 'Handcrafted Indian Ethnic Wear'}
+        </p>
 
-        <div className="flex items-center justify-between text-sm mb-3">
-          <div className="flex items-baseline gap-1.5">
-            <span className="font-bold text-[#70283b] text-base">
+        {/* Price & Stock Row */}
+        <div className="flex items-baseline justify-between gap-2 mb-3.5 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-baseline gap-2 tabular-nums">
+            <span className="font-bold text-base" style={{ color: 'var(--primary)' }}>
               {formatINR(product.price)}
             </span>
             {product.old_price && product.old_price > product.price && (
-              <span className="text-xs text-[#a99c98] line-through">
+              <span className="text-xs line-through" style={{ color: 'var(--text-muted)' }}>
                 {formatINR(product.old_price)}
               </span>
             )}
           </div>
-          <small className={`text-[11px] font-medium ${isOutOfStock ? 'text-red-600' : 'text-[#776c6b]'}`}>
-            {isOutOfStock ? 'Out of stock' : `${product.stock} left`}
-          </small>
+          <span
+            className="text-[11px] font-medium tabular-nums shrink-0"
+            style={{ color: isOutOfStock ? 'var(--error-text)' : 'var(--text-muted)' }}
+          >
+            {isOutOfStock ? 'Out of stock' : `${product.stock} in stock`}
+          </span>
         </div>
       </div>
 
-      {/* Action Button */}
+      {/* Primary Action Button */}
       <button
         type="button"
         disabled={isOutOfStock}
         onClick={() => onAddToCart(product)}
         aria-label={`Add ${product.name} to shopping bag`}
-        className={`w-full py-2.5 px-3 border text-xs font-semibold tracking-wider transition-all duration-200 rounded-xs uppercase ${
-          isOutOfStock
-            ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-            : 'border-[#70283b] text-[#70283b] bg-white hover:bg-[#70283b] hover:text-white'
-        }`}
+        className="w-full py-2.5 px-4 rounded-lg text-xs font-semibold tracking-wider uppercase transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
+        style={{
+          backgroundColor: isOutOfStock ? 'var(--surface-elevated)' : 'var(--primary)',
+          color: isOutOfStock ? 'var(--text-muted)' : 'var(--btn-text)',
+          border: `1px solid ${isOutOfStock ? 'var(--border)' : 'var(--primary)'}`,
+        }}
       >
-        {isOutOfStock ? 'Out of stock' : 'Add to Bag +'}
+        <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+        <span>{isOutOfStock ? 'Out of Stock' : 'Add to Bag'}</span>
       </button>
     </article>
   );

@@ -1,5 +1,11 @@
 import type { Product, Order, CustomerDetails, OrderItem } from '../utils/ecommerce';
-import { initialProducts, initialOrders, formatINR } from '../utils/ecommerce';
+import {
+  initialProducts,
+  initialOrders,
+  formatINR,
+  generateUpiUri,
+  resolveInitialOrderStatus,
+} from '../utils/ecommerce';
 import {
   fetchFirestoreProducts,
   saveFirestoreProduct,
@@ -12,16 +18,7 @@ import {
   subscribeToFirestoreOrders,
 } from './firebase';
 export { subscribeToFirestoreProducts, subscribeToFirestoreOrders };
-import {
-  getEffectiveSupabaseUrl,
-  getEffectiveSupabaseKey,
-  isPlaceholderSupabaseUrl,
-  saveCustomSupabaseCredentials,
-  sanitizeUrl,
-  sanitizeKey,
-  extractProjectRef,
-  DEFAULT_PROJECT_REF,
-} from './supabase';
+
 import { addMerchantActivity } from './activity';
 
 const TOKEN_KEY = 'ishq_merchant_token';
@@ -88,17 +85,7 @@ export async function isHostResolvable(url: string): Promise<boolean> {
       return cached.resolvable;
     }
 
-    if (!isStaticHost()) {
-      try {
-        const res = await fetch(`/api/supabase/check-dns?host=${encodeURIComponent(hostname)}`);
-        if (res.ok) {
-          const data = await res.json();
-          const isOk = !!data.resolvable;
-          knownResolvableHosts.set(hostname, { resolvable: isOk, timestamp: Date.now() });
-          return isOk;
-        }
-      } catch {}
-    }
+
 
     try {
       const dohRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(hostname)}`);
@@ -133,7 +120,7 @@ export function isCloudCircuitActive(): boolean {
 export function tripCloudCircuit(reason?: string) {
   cloudCircuitOpen = true;
   cloudCircuitLastTrip = Date.now();
-  cloudCircuitReason = reason || 'Project unreachable or paused in Supabase';
+  cloudCircuitReason = reason || 'Cloud Firestore unreachable';
 }
 
 export function resetCloudCircuit() {
@@ -310,12 +297,18 @@ export async function deleteProduct(id: string): Promise<void> {
 export async function createOrder(payload: {
   customer_details: CustomerDetails;
   items: OrderItem[];
-  payment_method: 'UPI' | 'COD';
+  payment_method: 'UPI' | 'COD' | 'RAZORPAY';
   upi_ref_id?: string;
+  razorpay_payment_id?: string;
   total: number;
 }): Promise<Order> {
   const orderId = 'IIC-' + Math.floor(100000 + Math.random() * 900000);
   const now = new Date().toISOString();
+
+  const initialStatus = resolveInitialOrderStatus(
+    payload.payment_method,
+    payload.razorpay_payment_id
+  );
 
   const newOrder: Order = {
     id: orderId,
@@ -323,6 +316,8 @@ export async function createOrder(payload: {
       name: payload.customer_details.name || 'Customer',
       phone: payload.customer_details.phone || '',
       address: payload.customer_details.address || '',
+      ...(payload.customer_details.city ? { city: payload.customer_details.city } : {}),
+      ...(payload.customer_details.pincode ? { pincode: payload.customer_details.pincode } : {}),
     },
     items: payload.items.map((item) => ({
       id: item.id,
@@ -332,7 +327,8 @@ export async function createOrder(payload: {
     })),
     payment_method: payload.payment_method,
     ...(payload.upi_ref_id ? { upi_ref_id: payload.upi_ref_id } : {}),
-    status: 'Confirmed',
+    ...(payload.razorpay_payment_id ? { razorpay_payment_id: payload.razorpay_payment_id } : {}),
+    status: initialStatus,
     total: Number(payload.total),
     created_at: now,
   };
@@ -369,10 +365,17 @@ export async function createOrder(payload: {
   });
   setLocalProducts(products);
 
+  const methodLabel =
+    placedOrder.payment_method === 'UPI'
+      ? 'UPI QR (Pending Verification)'
+      : placedOrder.payment_method === 'RAZORPAY'
+      ? 'Razorpay Online (Paid)'
+      : 'Cash on Delivery (Pay on Delivery)';
+
   addMerchantActivity({
     type: 'order',
     title: 'New Customer Order Placed',
-    detail: `Order #${placedOrder.id} placed by ${placedOrder.customer_details.name} (₹${placedOrder.total.toLocaleString('en-IN')} via ${placedOrder.payment_method === 'UPI' ? 'UPI QR' : 'Cash on Delivery'})`,
+    detail: `Order #${placedOrder.id} placed by ${placedOrder.customer_details.name} (₹${placedOrder.total.toLocaleString('en-IN')} via ${methodLabel})`,
   });
 
   return placedOrder;
@@ -480,7 +483,6 @@ export async function generateUpiQrCode(params: {
   vpa?: string;
 }): Promise<{ upiUri: string; qrDataUrl: string; vpa: string }> {
   const QRCode = (await import('qrcode')).default;
-  const { generateUpiUri } = await import('../utils/ecommerce');
 
   const vpa = params.vpa || 'merchant.indianishq@okicici';
   const payeeName = params.payeeName || 'Indian Ishq Collection';

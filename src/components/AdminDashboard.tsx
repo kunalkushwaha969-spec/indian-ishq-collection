@@ -9,10 +9,10 @@ import {
   updateOrderStatus,
   loginAdmin,
   verifyAdminSession,
-  getStoredToken,
   setStoredToken,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
+  uploadImageDirect,
 } from '../services/api';
 import {
   type MerchantActivity,
@@ -21,6 +21,13 @@ import {
   getUnreadActivityCount,
 } from '../services/activity';
 import { ProductModal } from './ProductModal';
+import {
+  type StoreSettings,
+  DEFAULT_STORE_SETTINGS,
+  getLocalStoreSettings,
+  fetchStoreSettings,
+  saveStoreSettings,
+} from '../services/settings';
 import {
   Lock,
   ShieldCheck,
@@ -41,7 +48,7 @@ import {
   Phone,
   User,
   CheckCircle2,
-  ChevronRight,
+  X,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -64,22 +71,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loginError, setLoginError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'inventory' | 'orders' | 'activity'
+    'overview' | 'inventory' | 'orders' | 'activity' | 'settings'
   >('overview');
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [storeSettings, setStoreSettings] = useState<StoreSettings>(() =>
+    getLocalStoreSettings()
+  );
+  const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const [banner, setBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [banner, setBanner] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+  } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [recentOrderFilter, setRecentOrderFilter] = useState<'all' | 'completed' | 'in_progress'>('all');
+  const [recentOrderFilter, setRecentOrderFilter] = useState<'all' | 'completed' | 'in_progress'>(
+    'all'
+  );
 
-  // In-app Merchant Notification & Activity Log state
   const [activities, setActivities] = useState<MerchantActivity[]>(() => getMerchantActivities());
   const [unreadCount, setUnreadCount] = useState<number>(() => getUnreadActivityCount());
-  const [activityFilter, setActivityFilter] = useState<'all' | 'order' | 'inventory' | 'status'>('all');
+  const [activityFilter, setActivityFilter] = useState<'all' | 'order' | 'inventory' | 'status'>(
+    'all'
+  );
 
-  // Synchronize store activity log in real-time
   useEffect(() => {
     const updateActivities = () => {
       setActivities(getMerchantActivities());
@@ -89,52 +105,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => window.removeEventListener('ishq:activity-updated', updateActivities);
   }, []);
 
-  // Check auth session on open
- // Check merchant authentication when dashboard opens
-useEffect(() => {
-  if (!isOpen) return;
+  useEffect(() => {
+    if (!isOpen) return;
 
-  let cancelled = false;
+    let cancelled = false;
 
-  const checkAuth = async () => {
-    setIsCheckingAuth(true);
+    const checkAuth = async () => {
+      setIsCheckingAuth(true);
 
-    try {
-      const valid = await verifyAdminSession();
+      try {
+        const valid = await verifyAdminSession();
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      setIsAuthenticated(valid);
-      onAuthChange(valid);
+        setIsAuthenticated(valid);
+        onAuthChange(valid);
 
-      if (valid) {
-        await loadData();
-      } else {
+        if (valid) {
+          await loadData();
+        } else {
+          setStoredToken(null);
+        }
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error('Merchant session verification failed:', error);
+
+        setIsAuthenticated(false);
         setStoredToken(null);
+        onAuthChange(false);
+      } finally {
+        if (!cancelled) {
+          setIsCheckingAuth(false);
+        }
       }
-    } catch (error) {
-      if (cancelled) return;
+    };
 
-      console.error('Merchant session verification failed:', error);
+    checkAuth();
 
-      setIsAuthenticated(false);
-      setStoredToken(null);
-      onAuthChange(false);
-    } finally {
-      if (!cancelled) {
-        setIsCheckingAuth(false);
-      }
-    }
-  };
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, onAuthChange]);
 
-  checkAuth();
-
-  return () => {
-    cancelled = true;
-  };
-}, [isOpen, onAuthChange]);
-
-  // Real-time synchronization across devices (updates instantly when modified on phone or laptop)
   useEffect(() => {
     if (!isOpen || !isAuthenticated) return;
     const unsubProds = subscribeToFirestoreProducts((items) => {
@@ -154,16 +167,67 @@ useEffect(() => {
   const loadData = async () => {
     setIsLoadingData(true);
     try {
-      const [prods, ords] = await Promise.all([
+      const [prods, ords, liveSettings] = await Promise.all([
         fetchProducts('All', '').catch(() => []),
         fetchOrders().catch(() => []),
+        fetchStoreSettings().catch(() => getLocalStoreSettings()),
       ]);
       setProducts(prods);
       setOrders(ords);
+      setStoreSettings(liveSettings);
       setActivities(getMerchantActivities());
       setUnreadCount(getUnreadActivityCount());
-    } catch {} finally {
+    } catch {
+    } finally {
       setIsLoadingData(false);
+    }
+  };
+
+  const handleLogoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await uploadImageDirect(file);
+      setStoreSettings((prev) => ({ ...prev, logoUrl: dataUrl }));
+      setBanner({
+        type: 'info',
+        message: 'Logo image loaded! Click "Save Store Settings" to publish across the storefront.',
+      });
+    } catch (err: unknown) {
+      setBanner({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to load logo image file.',
+      });
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!storeSettings.codEnabled && !storeSettings.upiEnabled && !storeSettings.razorpayEnabled) {
+      setBanner({
+        type: 'error',
+        message: 'Please keep at least one payment method (COD, UPI QR, or Razorpay) enabled.',
+      });
+      return;
+    }
+
+    setIsSavingSettings(true);
+    try {
+      const saved = await saveStoreSettings(storeSettings);
+      setStoreSettings(saved);
+      setBanner({
+        type: 'success',
+        message:
+          'Store settings saved to Firebase Firestore and updated live across the storefront!',
+      });
+      setTimeout(() => setBanner(null), 4000);
+    } catch (err: unknown) {
+      setBanner({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to save store settings.',
+      });
+    } finally {
+      setIsSavingSettings(false);
     }
   };
 
@@ -171,7 +235,7 @@ useEffect(() => {
     e.preventDefault();
     setLoginError(null);
     try {
-     await loginAdmin(password, email);
+      await loginAdmin(password, email);
       setIsAuthenticated(true);
       onAuthChange(true);
       loadData();
@@ -189,9 +253,7 @@ useEffect(() => {
   const handleStockChange = async (id: string, newStock: number) => {
     try {
       await updateProductStock(id, newStock);
-      setProducts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, stock: newStock } : p))
-      );
+      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, stock: newStock } : p)));
       onCatalogChanged();
       setBanner({ type: 'success', message: 'Stock updated!' });
       setTimeout(() => setBanner(null), 3000);
@@ -216,9 +278,7 @@ useEffect(() => {
   const handleStatusChange = async (orderId: string, newStatus: Order['status']) => {
     try {
       await updateOrderStatus(orderId, newStatus);
-      setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
-      );
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)));
       setBanner({ type: 'success', message: `Order #${orderId} marked as ${newStatus}!` });
       setTimeout(() => setBanner(null), 3000);
     } catch (err: any) {
@@ -244,7 +304,8 @@ useEffect(() => {
 
   const totalRevenue = nonCancelledOrders.reduce((sum, o) => sum + o.total, 0);
   const completedRevenue = completedOrders.reduce((sum, o) => sum + o.total, 0);
-  const avgOrderValue = nonCancelledOrders.length > 0 ? Math.round(totalRevenue / nonCancelledOrders.length) : 0;
+  const avgOrderValue =
+    nonCancelledOrders.length > 0 ? Math.round(totalRevenue / nonCancelledOrders.length) : 0;
   const outOfStockCount = products.filter((p) => p.stock <= 0).length;
 
   const displayedRecentOrders = orders.filter((o) => {
@@ -264,27 +325,61 @@ useEffect(() => {
       role="dialog"
       aria-modal="true"
       aria-labelledby="admin-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-xs overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      style={{ backgroundColor: 'var(--overlay)' }}
     >
-      <div className="bg-[#fffdf9] w-full max-w-5xl rounded-xl shadow-2xl border border-[#eadfda] flex flex-col max-h-[92vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div
+        className="w-full max-w-5xl rounded-xl shadow-2xl border flex flex-col max-h-[92vh] overflow-hidden transition-colors"
+        style={{
+          backgroundColor: 'var(--surface)',
+          borderColor: 'var(--border)',
+          color: 'var(--text-main)',
+        }}
+      >
         {/* HEADER BAR */}
-        <div className="p-4 sm:p-5 border-b border-[#eadfda] flex items-center justify-between bg-[#fcf9f5]">
+        <div
+          className="p-4 sm:p-5 border-b flex items-center justify-between"
+          style={{
+            backgroundColor: 'var(--surface-elevated)',
+            borderColor: 'var(--border)',
+          }}
+        >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-[#f8eeeb] text-[#70283b] rounded-lg border border-[#eadfda]">
+            <div
+              className="p-2 rounded-lg border"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--primary)',
+              }}
+            >
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] tracking-widest uppercase font-semibold text-[#b78a4b]">
+                <span
+                  className="text-[10px] tracking-widest uppercase font-semibold"
+                  style={{ color: 'var(--accent)' }}
+                >
                   Store Administration
                 </span>
                 {isAuthenticated && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                  <span
+                    className="px-2 py-0.5 rounded text-[10px] font-bold"
+                    style={{
+                      backgroundColor: 'var(--success-bg)',
+                      color: 'var(--success-text)',
+                    }}
+                  >
                     Live Session Active
                   </span>
                 )}
               </div>
-              <h2 id="admin-title" className="font-serif text-2xl text-[#70283b] leading-tight">
+              <h2
+                id="admin-title"
+                className="font-serif text-2xl font-semibold leading-tight"
+                style={{ color: 'var(--text-main)' }}
+              >
                 Merchant Workspace
               </h2>
             </div>
@@ -293,20 +388,24 @@ useEffect(() => {
           <div className="flex items-center gap-2">
             {isAuthenticated && (
               <>
-                {/* Notification Bell Badge Button */}
                 <button
                   type="button"
                   onClick={() => {
                     setActiveTab('activity');
                     handleMarkAllRead();
                   }}
-                  className="relative p-2 text-[#70283b] hover:bg-white rounded-lg border border-[#eadfda] transition-colors flex items-center gap-1.5 cursor-pointer"
+                  className="relative p-2 rounded-lg border transition-colors flex items-center gap-1.5 cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
                   title="Merchant Activity & Order Alerts"
                 >
-                  <Bell className="w-4 h-4" />
+                  <Bell className="w-4 h-4" style={{ color: 'var(--primary)' }} />
                   <span className="text-xs font-semibold hidden sm:inline">Alerts</span>
                   {unreadCount > 0 && (
-                    <span className="px-1.5 py-0.2 bg-red-600 text-white rounded-full text-[10px] font-bold animate-pulse">
+                    <span className="px-1.5 py-0.5 bg-red-600 text-white rounded-full text-[10px] font-bold tabular-nums">
                       {unreadCount}
                     </span>
                   )}
@@ -315,7 +414,12 @@ useEffect(() => {
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="px-3 py-2 border border-red-200 text-red-700 hover:bg-red-50 text-xs font-medium rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+                  className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--error-bg)',
+                    borderColor: 'var(--error-border)',
+                    color: 'var(--error-text)',
+                  }}
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Logout</span>
@@ -326,9 +430,14 @@ useEffect(() => {
               type="button"
               onClick={onClose}
               aria-label="Close merchant dashboard"
-              className="text-2xl text-[#70283b] hover:opacity-75 p-1 leading-none ml-2 cursor-pointer"
+              className="w-9 h-9 rounded-lg border flex items-center justify-center ml-1 cursor-pointer"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-main)',
+              }}
             >
-              ×
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -336,30 +445,56 @@ useEffect(() => {
         {/* BODY */}
         <div className="flex-1 overflow-y-auto">
           {isCheckingAuth ? (
-            <div className="py-20 text-center text-[#776c6b] text-xs">
+            <div className="py-20 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
               Verifying merchant authorization...
             </div>
           ) : !isAuthenticated ? (
             /* LOCK SCREEN */
-            <div className="max-w-md mx-auto my-12 p-8 bg-white border border-[#eadfda] rounded-lg shadow-sm text-center">
-              <div className="w-14 h-14 bg-[#f8eeeb] text-[#70283b] rounded-full flex items-center justify-center mx-auto mb-4 border border-[#eadfda]">
-                <Lock className="w-7 h-7" />
+            <div
+              className="max-w-md mx-auto my-12 p-8 border rounded-xl shadow-sm text-center"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                borderColor: 'var(--border)',
+              }}
+            >
+              <div
+                className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4 border"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--primary)',
+                }}
+              >
+                <Lock className="w-6 h-6" />
               </div>
 
-              <h3 className="font-serif text-2xl text-[#292222]">Merchant Login</h3>
-              <p className="text-xs text-[#776c6b] mt-1 mb-6 leading-relaxed">
-                Sign in to manage catalog items, review incoming customer orders, and update inventory stock counts.
+              <h3 className="font-serif text-2xl font-semibold" style={{ color: 'var(--text-main)' }}>
+                Merchant Login
+              </h3>
+              <p className="text-xs mt-1 mb-6 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                Sign in to manage catalog items, review incoming customer orders, and update
+                inventory stock counts.
               </p>
 
               {loginError && (
-                <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs text-left rounded-r">
+                <div
+                  className="mb-4 p-3 border rounded-lg text-xs text-left"
+                  style={{
+                    backgroundColor: 'var(--error-bg)',
+                    borderColor: 'var(--error-border)',
+                    color: 'var(--error-text)',
+                  }}
+                >
                   {loginError}
                 </div>
               )}
 
               <form onSubmit={handleLogin} className="space-y-4 text-left">
                 <div>
-                  <label className="block text-xs font-semibold text-[#776c6b] uppercase mb-1">
+                  <label
+                    className="block text-xs font-semibold uppercase mb-1"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     Merchant Email
                   </label>
                   <input
@@ -367,12 +502,20 @@ useEffect(() => {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full p-2.5 bg-[#fffdf9] border border-[#eadfda] rounded text-xs text-[#292222] focus:outline-[#b78a4b]"
+                    className="w-full p-2.5 border rounded-lg text-xs"
+                    style={{
+                      backgroundColor: 'var(--input-bg)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-[#776c6b] uppercase mb-1">
+                  <label
+                    className="block text-xs font-semibold uppercase mb-1"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     Admin Password
                   </label>
                   <input
@@ -380,17 +523,36 @@ useEffect(() => {
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full p-2.5 bg-[#fffdf9] border border-[#eadfda] rounded text-xs text-[#292222] focus:outline-[#b78a4b]"
+                    className="w-full p-2.5 border rounded-lg text-xs"
+                    style={{
+                      backgroundColor: 'var(--input-bg)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
                   />
                 </div>
 
-                <div className="bg-[#fcf5f3] p-3 rounded text-[11px] text-[#70283b] border border-[#eadfda]">
-                  Demo Merchant Password: <strong className="font-mono">ishq2026</strong>
+                <div
+                  className="p-3 rounded-lg text-[11px] border"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  Demo Merchant Password:{' '}
+                  <strong className="font-mono" style={{ color: 'var(--primary)' }}>
+                    ishq2026
+                  </strong>
                 </div>
 
                 <button
                   type="submit"
-                  className="w-full py-3 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold tracking-wider uppercase rounded transition-colors shadow cursor-pointer"
+                  className="w-full py-3 text-xs font-semibold tracking-wider uppercase rounded-lg transition-opacity hover:opacity-95 shadow cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--primary)',
+                    color: 'var(--btn-text)',
+                  }}
                 >
                   Enter Workspace
                 </button>
@@ -399,21 +561,23 @@ useEffect(() => {
           ) : (
             /* AUTHENTICATED MERCHANT DASHBOARD */
             <div className="p-4 sm:p-6 space-y-6">
-              {/* Inline Notification Banner */}
               {banner && (
                 <div
                   role="status"
-                  className={`p-3 rounded text-xs flex items-center justify-between border transition-all ${
-                    banner.type === 'error'
-                      ? 'bg-red-50 text-red-800 border-red-200'
-                      : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                  }`}
+                  className="p-3 rounded-lg text-xs flex items-center justify-between border transition-all"
+                  style={{
+                    backgroundColor:
+                      banner.type === 'error' ? 'var(--error-bg)' : 'var(--success-bg)',
+                    borderColor:
+                      banner.type === 'error' ? 'var(--error-border)' : 'var(--success-border)',
+                    color: banner.type === 'error' ? 'var(--error-text)' : 'var(--success-text)',
+                  }}
                 >
                   <div className="flex items-center gap-2">
                     {banner.type === 'error' ? (
-                      <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
                     ) : (
-                      <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600" />
+                      <CheckCircle className="w-4 h-4 shrink-0" />
                     )}
                     <span>{banner.message}</span>
                   </div>
@@ -421,7 +585,7 @@ useEffect(() => {
                     type="button"
                     onClick={() => setBanner(null)}
                     aria-label="Dismiss notification"
-                    className="text-xs font-bold px-1.5 py-0.5 text-gray-500 hover:text-gray-800 cursor-pointer"
+                    className="text-xs font-bold px-1.5 py-0.5 cursor-pointer"
                   >
                     ×
                   </button>
@@ -430,22 +594,46 @@ useEffect(() => {
 
               {/* Metrics */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div className="bg-[#f8eeeb] p-4 rounded-xl border border-[#eadfda]">
-                  <div className="flex items-center justify-between text-[#776c6b] text-xs">
+                <div
+                  className="p-4 rounded-xl border"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
+                  <div
+                    className="flex items-center justify-between text-xs"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     <span>Total Sales</span>
-                    <TrendingUp className="w-4 h-4 text-[#70283b]" />
+                    <TrendingUp className="w-4 h-4" style={{ color: 'var(--primary)' }} />
                   </div>
-                  <strong className="block font-serif text-2xl text-[#70283b] mt-2">
+                  <strong
+                    className="block font-serif text-2xl mt-2 tabular-nums"
+                    style={{ color: 'var(--primary)' }}
+                  >
                     {formatINR(totalRevenue)}
                   </strong>
                 </div>
 
-                <div className="bg-[#f8eeeb] p-4 rounded-xl border border-[#eadfda]">
-                  <div className="flex items-center justify-between text-[#776c6b] text-xs">
+                <div
+                  className="p-4 rounded-xl border"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
+                  <div
+                    className="flex items-center justify-between text-xs"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     <span>Live Orders</span>
-                    <ShoppingBag className="w-4 h-4 text-[#70283b]" />
+                    <ShoppingBag className="w-4 h-4" style={{ color: 'var(--primary)' }} />
                   </div>
-                  <strong className="block font-serif text-2xl text-[#70283b] mt-2 flex items-center gap-2">
+                  <strong
+                    className="block font-serif text-2xl mt-2 flex items-center gap-2 tabular-nums"
+                    style={{ color: 'var(--primary)' }}
+                  >
                     <span>{orders.length}</span>
                     {unreadCount > 0 && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600 text-white font-sans font-bold">
@@ -455,152 +643,291 @@ useEffect(() => {
                   </strong>
                 </div>
 
-                <div className="bg-[#f8eeeb] p-4 rounded-xl border border-[#eadfda]">
-                  <div className="flex items-center justify-between text-[#776c6b] text-xs">
+                <div
+                  className="p-4 rounded-xl border"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
+                  <div
+                    className="flex items-center justify-between text-xs"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     <span>Catalog Items</span>
-                    <Package className="w-4 h-4 text-[#70283b]" />
+                    <Package className="w-4 h-4" style={{ color: 'var(--primary)' }} />
                   </div>
-                  <strong className="block font-serif text-2xl text-[#70283b] mt-2">
+                  <strong
+                    className="block font-serif text-2xl mt-2 tabular-nums"
+                    style={{ color: 'var(--primary)' }}
+                  >
                     {products.length}
                   </strong>
                 </div>
 
-                <div className="bg-[#f8eeeb] p-4 rounded-xl border border-[#eadfda]">
-                  <div className="flex items-center justify-between text-[#776c6b] text-xs">
+                <div
+                  className="p-4 rounded-xl border"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
+                  <div
+                    className="flex items-center justify-between text-xs"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     <span>Low / Sold Out</span>
-                    <AlertTriangle className="w-4 h-4 text-[#b78a4b]" />
+                    <AlertTriangle className="w-4 h-4" style={{ color: 'var(--accent)' }} />
                   </div>
-                  <strong className="block font-serif text-2xl text-[#70283b] mt-2">
+                  <strong
+                    className="block font-serif text-2xl mt-2 tabular-nums"
+                    style={{ color: 'var(--primary)' }}
+                  >
                     {outOfStockCount}
                   </strong>
                 </div>
               </div>
 
               {/* Clean Store Management Tabs */}
-              <div className="flex border-b border-[#eadfda] gap-2 overflow-x-auto pb-1">
+              <div
+                className="flex border-b gap-2 overflow-x-auto pb-1"
+                style={{ borderColor: 'var(--border)' }}
+              >
                 {[
                   { id: 'overview', label: 'Overview' },
                   { id: 'inventory', label: `Products (${products.length})` },
                   { id: 'orders', label: `Orders (${orders.length})` },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`px-4 py-2.5 rounded-t-lg text-xs font-semibold tracking-wider transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
-                      activeTab === tab.id
-                        ? 'bg-[#70283b] text-white'
-                        : 'bg-transparent text-[#776c6b] hover:text-[#70283b]'
-                    }`}
-                  >
-                    <span>{tab.label}</span>
-                  </button>
-                ))}
+                  { id: 'settings', label: 'Store Settings' },
+                ].map((tab) => {
+                  const active = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id as any)}
+                      className="px-4 py-2.5 rounded-t-lg text-xs font-semibold tracking-wider transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer"
+                      style={{
+                        backgroundColor: active ? 'var(--primary)' : 'transparent',
+                        color: active ? 'var(--btn-text)' : 'var(--text-muted)',
+                      }}
+                    >
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
               </div>
 
               {/* TAB 1: OVERVIEW */}
               {activeTab === 'overview' && (
                 <div className="space-y-6">
                   {/* DEDICATED RECENT ORDERS SECTION */}
-                  <div className="space-y-4 bg-white p-5 rounded-xl border border-[#eadfda] shadow-xs">
-                    {/* Section Header & Performance Controls */}
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-[#eadfda] pb-4">
+                  <div
+                    className="space-y-4 p-5 rounded-xl border shadow-xs"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <div
+                      className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b pb-4"
+                      style={{ borderColor: 'var(--border)' }}
+                    >
                       <div>
                         <div className="flex items-center gap-2">
-                          <ShoppingBag className="w-5 h-5 text-[#70283b]" />
-                          <h3 className="font-serif text-xl font-bold text-[#70283b]">Recent Orders</h3>
+                          <ShoppingBag className="w-5 h-5" style={{ color: 'var(--primary)' }} />
+                          <h3
+                            className="font-serif text-xl font-bold"
+                            style={{ color: 'var(--text-main)' }}
+                          >
+                            Recent Orders
+                          </h3>
                           {completedOrders.length > 0 && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1">
+                            <span
+                              className="px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1"
+                              style={{
+                                backgroundColor: 'var(--success-bg)',
+                                color: 'var(--success-text)',
+                              }}
+                            >
                               <CheckCircle2 className="w-3 h-3" />
                               <span>{completedOrders.length} Completed</span>
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-[#776c6b] mt-0.5">
-                          Track customer details, fulfillment progress, and completed sales performance.
+                        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                          Track customer details, fulfillment progress, and completed sales
+                          performance.
                         </p>
                       </div>
 
                       <div className="flex items-center gap-2 self-stretch sm:self-auto justify-between sm:justify-end">
-                        {/* Status Filter Pills */}
-                        <div className="flex items-center bg-[#fcf9f5] p-1 rounded-lg border border-[#eadfda] text-xs">
+                        <div
+                          className="flex items-center p-1 rounded-lg border text-xs"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                          }}
+                        >
                           {(
                             [
                               { id: 'all', label: `All (${orders.length})` },
                               { id: 'completed', label: `Completed (${completedOrders.length})` },
-                              { id: 'in_progress', label: `In Progress (${inProgressOrders.length})` },
+                              {
+                                id: 'in_progress',
+                                label: `In Progress (${inProgressOrders.length})`,
+                              },
                             ] as const
-                          ).map((tab) => (
-                            <button
-                              key={tab.id}
-                              type="button"
-                              onClick={() => setRecentOrderFilter(tab.id)}
-                              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-                                recentOrderFilter === tab.id
-                                  ? 'bg-[#70283b] text-white shadow-xs font-semibold'
-                                  : 'text-[#776c6b] hover:text-[#70283b]'
-                              }`}
-                            >
-                              {tab.label}
-                            </button>
-                          ))}
+                          ).map((tab) => {
+                            const active = recentOrderFilter === tab.id;
+                            return (
+                              <button
+                                key={tab.id}
+                                type="button"
+                                onClick={() => setRecentOrderFilter(tab.id)}
+                                className="px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap"
+                                style={{
+                                  backgroundColor: active ? 'var(--primary)' : 'transparent',
+                                  color: active ? 'var(--btn-text)' : 'var(--text-muted)',
+                                }}
+                              >
+                                {tab.label}
+                              </button>
+                            );
+                          })}
                         </div>
 
                         <button
                           type="button"
                           onClick={loadData}
-                          className="px-2.5 py-1.5 bg-[#fcf9f5] border border-[#eadfda] hover:bg-[#f8eeeb] text-[#70283b] rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                          className="px-2.5 py-1.5 border rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
                           title="Refresh live orders from database"
                         >
-                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`} />
+                          <RefreshCw
+                            className={`w-3.5 h-3.5 ${isLoadingData ? 'animate-spin' : ''}`}
+                          />
                           <span className="hidden sm:inline">Sync</span>
                         </button>
                       </div>
                     </div>
 
                     {/* Performance Mini-Stats Strip */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#fdfaf7] p-3 rounded-lg border border-[#f0e6e1] text-xs">
+                    <div
+                      className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3.5 rounded-lg border text-xs tabular-nums"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        borderColor: 'var(--border)',
+                      }}
+                    >
                       <div>
-                        <span className="text-[#776c6b] text-[10px] uppercase font-semibold block">Completed Revenue</span>
-                        <strong className="text-sm font-bold text-emerald-800 font-serif">
+                        <span
+                          className="text-[10px] uppercase font-semibold block"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Completed Revenue
+                        </span>
+                        <strong
+                          className="text-base font-bold font-serif"
+                          style={{ color: 'var(--success-text)' }}
+                        >
                           {formatINR(completedRevenue)}
                         </strong>
-                        <span className="text-[10px] text-gray-500 block">{completedOrders.length} delivered orders</span>
+                        <span className="text-[10px] block" style={{ color: 'var(--text-muted)' }}>
+                          {completedOrders.length} delivered orders
+                        </span>
                       </div>
                       <div>
-                        <span className="text-[#776c6b] text-[10px] uppercase font-semibold block">Total Active Sales</span>
-                        <strong className="text-sm font-bold text-[#70283b] font-serif">
+                        <span
+                          className="text-[10px] uppercase font-semibold block"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Total Active Sales
+                        </span>
+                        <strong
+                          className="text-base font-bold font-serif"
+                          style={{ color: 'var(--primary)' }}
+                        >
                           {formatINR(totalRevenue)}
                         </strong>
-                        <span className="text-[10px] text-gray-500 block">{nonCancelledOrders.length} valid orders</span>
+                        <span className="text-[10px] block" style={{ color: 'var(--text-muted)' }}>
+                          {nonCancelledOrders.length} valid orders
+                        </span>
                       </div>
                       <div>
-                        <span className="text-[#776c6b] text-[10px] uppercase font-semibold block">Avg Order Value (AOV)</span>
-                        <strong className="text-sm font-bold text-[#292222] font-serif">
+                        <span
+                          className="text-[10px] uppercase font-semibold block"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Avg Order Value (AOV)
+                        </span>
+                        <strong
+                          className="text-base font-bold font-serif"
+                          style={{ color: 'var(--text-main)' }}
+                        >
                           {formatINR(avgOrderValue)}
                         </strong>
-                        <span className="text-[10px] text-gray-500 block">per customer basket</span>
+                        <span className="text-[10px] block" style={{ color: 'var(--text-muted)' }}>
+                          per customer basket
+                        </span>
                       </div>
                       <div>
-                        <span className="text-[#776c6b] text-[10px] uppercase font-semibold block">Fulfillment Rate</span>
-                        <strong className="text-sm font-bold text-[#b78a4b] font-serif">
+                        <span
+                          className="text-[10px] uppercase font-semibold block"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Fulfillment Rate
+                        </span>
+                        <strong
+                          className="text-base font-bold font-serif"
+                          style={{ color: 'var(--accent)' }}
+                        >
                           {nonCancelledOrders.length > 0
                             ? Math.round((completedOrders.length / nonCancelledOrders.length) * 100)
-                            : 0}%
+                            : 0}
+                          %
                         </strong>
-                        <span className="text-[10px] text-gray-500 block">delivered to customer</span>
+                        <span className="text-[10px] block" style={{ color: 'var(--text-muted)' }}>
+                          delivered to customer
+                        </span>
                       </div>
                     </div>
 
                     {/* Orders Table */}
                     {displayedRecentOrders.length === 0 ? (
-                      <div className="p-8 text-center bg-[#fffdfa] border border-[#eadfda] rounded-lg text-xs text-[#776c6b]">
-                        No {recentOrderFilter === 'completed' ? 'completed' : recentOrderFilter === 'in_progress' ? 'in-progress' : ''} orders recorded yet. Customer checkouts will automatically appear here.
+                      <div
+                        className="p-8 text-center border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-muted)',
+                        }}
+                      >
+                        No{' '}
+                        {recentOrderFilter === 'completed'
+                          ? 'completed'
+                          : recentOrderFilter === 'in_progress'
+                          ? 'in-progress'
+                          : ''}{' '}
+                        orders recorded yet. Customer checkouts will automatically appear here.
                       </div>
                     ) : (
-                      <div className="overflow-x-auto border border-[#eadfda] rounded-lg shadow-xs">
+                      <div
+                        className="overflow-x-auto border rounded-lg shadow-xs"
+                        style={{ borderColor: 'var(--border)' }}
+                      >
                         <table className="w-full text-left text-xs">
-                          <thead className="bg-[#fcf9f5] border-b border-[#eadfda] text-[#776c6b] font-semibold text-[11px] uppercase tracking-wider">
+                          <thead
+                            className="border-b font-semibold text-[11px] uppercase tracking-wider"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-muted)',
+                            }}
+                          >
                             <tr>
                               <th className="p-3">Order & Date</th>
                               <th className="p-3">Customer Details</th>
@@ -610,12 +937,17 @@ useEffect(() => {
                               <th className="p-3">Status</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-[#eadfda]">
+                          <tbody className="divide-y" style={{ borderColor: 'var(--border)' }}>
                             {displayedRecentOrders.map((ord) => (
-                              <tr key={ord.id} className="hover:bg-[#fcfbf9] transition-colors">
-                                <td className="p-3 align-top font-mono font-medium text-[#292222]">
-                                  <div className="font-bold text-[#70283b]">{ord.id}</div>
-                                  <div className="text-[10px] text-gray-500 font-sans mt-0.5">
+                              <tr key={ord.id}>
+                                <td className="p-3 align-top font-mono font-medium">
+                                  <div className="font-bold" style={{ color: 'var(--primary)' }}>
+                                    {ord.id}
+                                  </div>
+                                  <div
+                                    className="text-[10px] font-sans mt-0.5 tabular-nums"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
                                     {new Date(ord.created_at).toLocaleString('en-IN', {
                                       month: 'short',
                                       day: 'numeric',
@@ -626,20 +958,36 @@ useEffect(() => {
                                 </td>
 
                                 <td className="p-3 align-top max-w-[220px]">
-                                  <div className="font-semibold text-[#292222] flex items-center gap-1">
-                                    <User className="w-3 h-3 text-[#70283b] shrink-0" />
+                                  <div
+                                    className="font-semibold flex items-center gap-1"
+                                    style={{ color: 'var(--text-main)' }}
+                                  >
+                                    <User
+                                      className="w-3 h-3 shrink-0"
+                                      style={{ color: 'var(--primary)' }}
+                                    />
                                     <span>{ord.customer_details.name}</span>
                                   </div>
-                                  <div className="text-[11px] text-[#776c6b] flex items-center gap-1 mt-0.5">
-                                    <Phone className="w-3 h-3 text-stone-400 shrink-0" />
+                                  <div
+                                    className="text-[11px] flex items-center gap-1 mt-0.5 tabular-nums"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
+                                    <Phone className="w-3 h-3 shrink-0" />
                                     <span>{ord.customer_details.phone}</span>
                                   </div>
-                                  <div className="text-[11px] text-[#776c6b] flex items-start gap-1 mt-0.5 leading-tight">
-                                    <MapPin className="w-3 h-3 text-stone-400 shrink-0 mt-0.5" />
+                                  <div
+                                    className="text-[11px] flex items-start gap-1 mt-0.5 leading-tight"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
+                                    <MapPin className="w-3 h-3 shrink-0 mt-0.5" />
                                     <span>
                                       {ord.customer_details.address}
-                                      {ord.customer_details.city ? `, ${ord.customer_details.city}` : ''}
-                                      {ord.customer_details.pincode ? ` (${ord.customer_details.pincode})` : ''}
+                                      {ord.customer_details.city
+                                        ? `, ${ord.customer_details.city}`
+                                        : ''}
+                                      {ord.customer_details.pincode
+                                        ? ` (${ord.customer_details.pincode})`
+                                        : ''}
                                     </span>
                                   </div>
                                 </td>
@@ -647,10 +995,25 @@ useEffect(() => {
                                 <td className="p-3 align-top max-w-[200px]">
                                   <div className="space-y-1">
                                     {ord.items.map((it, idx) => (
-                                      <div key={idx} className="text-[#292222] text-[11px] leading-tight">
-                                        <span className="font-bold text-[#70283b]">{it.qty}x</span> {it.name}
+                                      <div
+                                        key={idx}
+                                        className="text-[11px] leading-tight"
+                                        style={{ color: 'var(--text-main)' }}
+                                      >
+                                        <span
+                                          className="font-bold tabular-nums"
+                                          style={{ color: 'var(--primary)' }}
+                                        >
+                                          {it.qty}x
+                                        </span>{' '}
+                                        {it.name}
                                         {it.price && (
-                                          <span className="text-gray-400 ml-1">({formatINR(it.price)})</span>
+                                          <span
+                                            className="ml-1 tabular-nums"
+                                            style={{ color: 'var(--text-muted)' }}
+                                          >
+                                            ({formatINR(it.price)})
+                                          </span>
                                         )}
                                       </div>
                                     ))}
@@ -659,23 +1022,41 @@ useEffect(() => {
 
                                 <td className="p-3 align-top">
                                   <span
-                                    className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
-                                      ord.payment_method === 'UPI'
-                                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                        : 'bg-[#fcf5f3] text-[#70283b] border border-[#eadfda]'
-                                    }`}
+                                    className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold border"
+                                    style={{
+                                      backgroundColor:
+                                        ord.payment_method === 'UPI'
+                                          ? 'var(--success-bg)'
+                                          : 'var(--surface-elevated)',
+                                      color:
+                                        ord.payment_method === 'UPI'
+                                          ? 'var(--success-text)'
+                                          : 'var(--primary)',
+                                      borderColor:
+                                        ord.payment_method === 'UPI'
+                                          ? 'var(--success-border)'
+                                          : 'var(--border)',
+                                    }}
                                   >
-                                    {ord.payment_method === 'UPI' ? 'UPI QR (Instant)' : 'Cash on Delivery'}
+                                    {ord.payment_method === 'UPI'
+                                      ? 'UPI QR (Instant)'
+                                      : 'Cash on Delivery'}
                                   </span>
                                   {ord.upi_ref_id && (
-                                    <div className="text-[10px] font-mono text-gray-500 mt-1">
+                                    <div
+                                      className="text-[10px] font-mono mt-1"
+                                      style={{ color: 'var(--text-muted)' }}
+                                    >
                                       UTR: {ord.upi_ref_id}
                                     </div>
                                   )}
                                 </td>
 
                                 <td className="p-3 align-top">
-                                  <strong className="font-serif text-sm font-bold text-[#70283b]">
+                                  <strong
+                                    className="font-serif text-sm font-bold tabular-nums"
+                                    style={{ color: 'var(--primary)' }}
+                                  >
                                     {formatINR(ord.total)}
                                   </strong>
                                 </td>
@@ -683,18 +1064,15 @@ useEffect(() => {
                                 <td className="p-3 align-top">
                                   <select
                                     value={ord.status}
-                                    onChange={(e) => handleStatusChange(ord.id, e.target.value as any)}
-                                    className={`p-1.5 border rounded text-xs font-semibold focus:outline-[#b78a4b] cursor-pointer ${
-                                      ord.status === 'Delivered'
-                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                        : ord.status === 'Shipped'
-                                        ? 'bg-blue-50 text-blue-800 border-blue-300'
-                                        : ord.status === 'Packed'
-                                        ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
-                                        : ord.status === 'Confirmed'
-                                        ? 'bg-amber-50 text-amber-800 border-amber-300'
-                                        : 'bg-red-50 text-red-800 border-red-300'
-                                    }`}
+                                    onChange={(e) =>
+                                      handleStatusChange(ord.id, e.target.value as any)
+                                    }
+                                    className="p-1.5 border rounded text-xs font-semibold cursor-pointer"
+                                    style={{
+                                      backgroundColor: 'var(--input-bg)',
+                                      borderColor: 'var(--border)',
+                                      color: 'var(--text-main)',
+                                    }}
                                   >
                                     <option value="Confirmed">Confirmed</option>
                                     <option value="Packed">Packed</option>
@@ -712,11 +1090,22 @@ useEffect(() => {
                   </div>
 
                   {/* Real-time Merchant Activity Preview Card */}
-                  <div className="p-5 bg-white border border-[#eadfda] rounded-xl space-y-3">
+                  <div
+                    className="p-5 border rounded-xl space-y-3"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Bell className="w-4 h-4 text-[#70283b]" />
-                        <h4 className="font-serif text-lg text-[#292222]">Store Activity Stream</h4>
+                        <Bell className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+                        <h4
+                          className="font-serif text-lg font-semibold"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Store Activity Stream
+                        </h4>
                       </div>
                       <button
                         type="button"
@@ -724,7 +1113,8 @@ useEffect(() => {
                           setActiveTab('activity');
                           handleMarkAllRead();
                         }}
-                        className="text-xs text-[#70283b] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                        className="text-xs font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                        style={{ color: 'var(--primary)' }}
                       >
                         <span>View Full Log ({activities.length})</span>
                         <span>→</span>
@@ -735,24 +1125,25 @@ useEffect(() => {
                       {activities.slice(0, 3).map((act) => (
                         <div
                           key={act.id}
-                          className="p-3 rounded-lg border border-[#f0e6e1] bg-[#fffdfa] flex items-center justify-between gap-3 text-xs"
+                          className="p-3 rounded-lg border flex items-center justify-between gap-3 text-xs"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                          }}
                         >
-                          <div className="flex items-center gap-2.5">
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                act.type === 'order'
-                                  ? 'bg-emerald-500'
-                                  : act.type === 'inventory'
-                                  ? 'bg-amber-500'
-                                  : 'bg-indigo-500'
-                              }`}
-                            />
-                            <div>
-                              <strong className="text-[#292222] font-semibold">{act.title}: </strong>
-                              <span className="text-[#776c6b]">{act.detail}</span>
-                            </div>
+                          <div>
+                            <strong
+                              className="font-semibold"
+                              style={{ color: 'var(--text-main)' }}
+                            >
+                              {act.title}:{' '}
+                            </strong>
+                            <span style={{ color: 'var(--text-muted)' }}>{act.detail}</span>
                           </div>
-                          <span className="text-[10px] text-stone-400 whitespace-nowrap font-mono">
+                          <span
+                            className="text-[10px] whitespace-nowrap font-mono tabular-nums"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
                             {new Date(act.timestamp).toLocaleTimeString('en-IN', {
                               hour: '2-digit',
                               minute: '2-digit',
@@ -770,24 +1161,46 @@ useEffect(() => {
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <div>
-                      <h3 className="font-serif text-xl text-[#70283b]">Products & Stock Management</h3>
-                      <p className="text-xs text-[#776c6b]">
+                      <h3
+                        className="font-serif text-xl font-semibold"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Products & Stock Management
+                      </h3>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                         Live catalog manager. Edit stock counts directly or add items with photos.
                       </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setIsAddModalOpen(true)}
-                      className="px-4 py-2 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold rounded uppercase tracking-wider flex items-center gap-1.5 shadow cursor-pointer"
+                      className="px-4 py-2 text-xs font-semibold rounded-lg uppercase tracking-wider flex items-center gap-1.5 shadow cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
                     >
                       <Plus className="w-4 h-4" />
                       <span>+ Add Product</span>
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto bg-white border border-[#eadfda] rounded-xl shadow-xs">
+                  <div
+                    className="overflow-x-auto border rounded-xl shadow-xs"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-[#fcf9f5] border-b border-[#eadfda] text-[#776c6b]">
+                      <thead
+                        className="border-b"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-muted)',
+                        }}
+                      >
                         <tr>
                           <th className="p-3">Image</th>
                           <th className="p-3">Product Name</th>
@@ -797,28 +1210,47 @@ useEffect(() => {
                           <th className="p-3">Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#eadfda]">
+                      <tbody className="divide-y" style={{ borderColor: 'var(--border)' }}>
                         {products.map((prod) => (
-                          <tr key={prod.id} className="hover:bg-gray-50">
+                          <tr key={prod.id}>
                             <td className="p-3">
                               <img
                                 src={prod.image_url}
                                 alt={prod.name}
-                                className="w-12 h-14 object-cover rounded border border-[#eadfda] bg-[#ead4c7]"
+                                className="w-12 h-14 object-cover rounded border"
+                                style={{
+                                  backgroundColor: 'var(--surface-elevated)',
+                                  borderColor: 'var(--border)',
+                                }}
                               />
                             </td>
                             <td className="p-3">
-                              <strong className="text-[#292222] block font-serif text-sm">
+                              <strong
+                                className="block font-serif text-sm"
+                                style={{ color: 'var(--text-main)' }}
+                              >
                                 {prod.name}
                               </strong>
-                              <span className="text-[10px] text-[#776c6b]">{prod.tag || 'CURATED'}</span>
+                              <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                {prod.tag || 'CURATED'}
+                              </span>
                             </td>
                             <td className="p-3">
-                              <span className="px-2 py-0.5 bg-gray-100 rounded text-gray-700 text-[11px]">
+                              <span
+                                className="px-2 py-0.5 rounded text-[11px] border"
+                                style={{
+                                  backgroundColor: 'var(--surface-elevated)',
+                                  borderColor: 'var(--border)',
+                                  color: 'var(--text-secondary)',
+                                }}
+                              >
                                 {prod.category}
                               </span>
                             </td>
-                            <td className="p-3 font-semibold text-[#70283b]">
+                            <td
+                              className="p-3 font-semibold tabular-nums"
+                              style={{ color: 'var(--primary)' }}
+                            >
                               {formatINR(prod.price)}
                             </td>
                             <td className="p-3">
@@ -826,8 +1258,15 @@ useEffect(() => {
                                 type="number"
                                 min={0}
                                 value={prod.stock}
-                                onChange={(e) => handleStockChange(prod.id, parseInt(e.target.value, 10) || 0)}
-                                className="w-16 p-1.5 border border-[#eadfda] rounded text-center font-semibold text-xs text-[#292222] focus:outline-[#b78a4b]"
+                                onChange={(e) =>
+                                  handleStockChange(prod.id, parseInt(e.target.value, 10) || 0)
+                                }
+                                className="w-16 p-1.5 border rounded text-center font-semibold text-xs tabular-nums"
+                                style={{
+                                  backgroundColor: 'var(--input-bg)',
+                                  borderColor: 'var(--border)',
+                                  color: 'var(--text-main)',
+                                }}
                               />
                             </td>
                             <td className="p-3">
@@ -843,7 +1282,12 @@ useEffect(() => {
                                   <button
                                     type="button"
                                     onClick={() => setConfirmDeleteId(null)}
-                                    className="px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-[10px] cursor-pointer"
+                                    className="px-2 py-1 border rounded text-[10px] cursor-pointer"
+                                    style={{
+                                      backgroundColor: 'var(--surface-elevated)',
+                                      borderColor: 'var(--border)',
+                                      color: 'var(--text-main)',
+                                    }}
                                   >
                                     Cancel
                                   </button>
@@ -853,7 +1297,8 @@ useEffect(() => {
                                   type="button"
                                   onClick={() => setConfirmDeleteId(prod.id)}
                                   aria-label={`Delete ${prod.name}`}
-                                  className="p-1.5 text-gray-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                                  className="p-1.5 rounded transition-colors cursor-pointer"
+                                  style={{ color: 'var(--text-muted)' }}
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -872,14 +1317,21 @@ useEffect(() => {
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <div>
-                      <h3 className="font-serif text-xl text-[#70283b]">Customer Orders</h3>
-                      <p className="text-xs text-[#776c6b]">
-                        Manage shipments, verify UPI transaction IDs, and handle Cash on Delivery orders.
+                      <h3
+                        className="font-serif text-xl font-semibold"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Customer Orders
+                      </h3>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Manage shipments, verify UPI transaction IDs, and handle Cash on Delivery
+                        orders.
                       </p>
                     </div>
                     <button
                       onClick={loadData}
-                      className="text-xs text-[#70283b] flex items-center gap-1 hover:underline cursor-pointer"
+                      className="text-xs flex items-center gap-1 hover:underline cursor-pointer"
+                      style={{ color: 'var(--primary)' }}
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>Refresh</span>
@@ -887,13 +1339,33 @@ useEffect(() => {
                   </div>
 
                   {orders.length === 0 ? (
-                    <div className="p-12 text-center bg-white border border-[#eadfda] rounded text-xs text-[#776c6b]">
+                    <div
+                      className="p-12 text-center border rounded-xl text-xs"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
                       No orders recorded yet.
                     </div>
                   ) : (
-                    <div className="overflow-x-auto bg-white border border-[#eadfda] rounded-xl shadow-xs">
+                    <div
+                      className="overflow-x-auto border rounded-xl shadow-xs"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                      }}
+                    >
                       <table className="w-full text-left text-xs">
-                        <thead className="bg-[#fcf9f5] border-b border-[#eadfda] text-[#776c6b]">
+                        <thead
+                          className="border-b"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
                           <tr>
                             <th className="p-3">Order Ref</th>
                             <th className="p-3">Customer Details</th>
@@ -903,30 +1375,41 @@ useEffect(() => {
                             <th className="p-3">Update Status</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-[#eadfda]">
+                        <tbody className="divide-y" style={{ borderColor: 'var(--border)' }}>
                           {orders.map((ord) => (
-                            <tr key={ord.id} className="hover:bg-gray-50">
-                              <td className="p-3 align-top font-mono text-[#292222]">
-                                <div className="font-bold">{ord.id}</div>
-                                <div className="text-[10px] text-[#776c6b]">
+                            <tr key={ord.id}>
+                              <td className="p-3 align-top font-mono">
+                                <div className="font-bold" style={{ color: 'var(--text-main)' }}>
+                                  {ord.id}
+                                </div>
+                                <div
+                                  className="text-[10px] tabular-nums"
+                                  style={{ color: 'var(--text-muted)' }}
+                                >
                                   {new Date(ord.created_at).toLocaleDateString('en-IN')}
                                 </div>
                               </td>
 
                               <td className="p-3 align-top">
-                                <div className="font-semibold text-[#292222]">
+                                <div
+                                  className="font-semibold"
+                                  style={{ color: 'var(--text-main)' }}
+                                >
                                   {ord.customer_details.name}
                                 </div>
-                                <div className="text-xs text-[#70283b]">
-                                  📞 {ord.customer_details.phone}
+                                <div
+                                  className="text-xs tabular-nums"
+                                  style={{ color: 'var(--primary)' }}
+                                >
+                                  {ord.customer_details.phone}
                                 </div>
                               </td>
 
                               <td className="p-3 align-top max-w-[200px]">
-                                <div className="text-xs text-[#292222]">
+                                <div className="text-xs" style={{ color: 'var(--text-main)' }}>
                                   {ord.customer_details.address}
                                 </div>
-                                <div className="text-[11px] text-[#776c6b]">
+                                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                                   {ord.customer_details.city} {ord.customer_details.pincode}
                                 </div>
                               </td>
@@ -934,23 +1417,49 @@ useEffect(() => {
                               <td className="p-3 align-top">
                                 <ul className="space-y-1">
                                   {ord.items.map((it, idx) => (
-                                    <li key={idx} className="text-[#292222]">
-                                      <span className="font-semibold">{it.qty}x</span> {it.name}
+                                    <li key={idx} style={{ color: 'var(--text-main)' }}>
+                                      <span className="font-semibold tabular-nums">{it.qty}x</span>{' '}
+                                      {it.name}
                                     </li>
                                   ))}
                                 </ul>
                               </td>
 
                               <td className="p-3 align-top">
-                                <div className="font-bold text-[#70283b] text-sm">
+                                <div
+                                  className="font-bold text-sm tabular-nums"
+                                  style={{ color: 'var(--primary)' }}
+                                >
                                   {formatINR(ord.total)}
                                 </div>
-                                <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-[#fcf5f3] text-[#70283b]">
-                                  {ord.payment_method === 'UPI' ? 'UPI QR' : 'Cash on Delivery'}
+                                <span
+                                  className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-semibold border"
+                                  style={{
+                                    backgroundColor: 'var(--surface-elevated)',
+                                    borderColor: 'var(--border)',
+                                    color: 'var(--primary)',
+                                  }}
+                                >
+                                  {ord.payment_method === 'UPI'
+                                    ? 'UPI QR'
+                                    : ord.payment_method === 'RAZORPAY'
+                                    ? 'Razorpay Online'
+                                    : 'Cash on Delivery'}
                                 </span>
                                 {ord.upi_ref_id && (
-                                  <div className="text-[10px] font-mono text-gray-500 mt-1">
+                                  <div
+                                    className="text-[10px] font-mono mt-1"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
                                     UTR: {ord.upi_ref_id}
+                                  </div>
+                                )}
+                                {ord.razorpay_payment_id && (
+                                  <div
+                                    className="text-[10px] font-mono mt-1"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
+                                    RZP: {ord.razorpay_payment_id}
                                   </div>
                                 )}
                               </td>
@@ -958,9 +1467,17 @@ useEffect(() => {
                               <td className="p-3 align-top">
                                 <select
                                   value={ord.status}
-                                  onChange={(e) => handleStatusChange(ord.id, e.target.value as any)}
-                                  className="p-1.5 bg-white border border-[#eadfda] rounded text-xs font-medium text-[#292222] focus:outline-[#b78a4b]"
+                                  onChange={(e) =>
+                                    handleStatusChange(ord.id, e.target.value as any)
+                                  }
+                                  className="p-1.5 border rounded text-xs font-medium"
+                                  style={{
+                                    backgroundColor: 'var(--input-bg)',
+                                    borderColor: 'var(--border)',
+                                    color: 'var(--text-main)',
+                                  }}
                                 >
+                                  <option value="Pending UPI Payment">Pending UPI Payment</option>
                                   <option value="Confirmed">Confirmed</option>
                                   <option value="Packed">Packed</option>
                                   <option value="Shipped">Shipped</option>
@@ -982,7 +1499,10 @@ useEffect(() => {
                 <div className="space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                     <div>
-                      <h3 className="font-serif text-xl text-[#70283b] flex items-center gap-2">
+                      <h3
+                        className="font-serif text-xl font-semibold flex items-center gap-2"
+                        style={{ color: 'var(--text-main)' }}
+                      >
                         <span>Merchant Activity Log & Alerts</span>
                         {unreadCount > 0 && (
                           <span className="px-2 py-0.5 rounded-full text-xs bg-red-600 text-white font-sans font-bold">
@@ -990,53 +1510,73 @@ useEffect(() => {
                           </span>
                         )}
                       </h3>
-                      <p className="text-xs text-[#776c6b]">
-                        Live audit log of all customer orders, stock adjustments, and inventory modifications.
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Live audit log of all customer orders, stock adjustments, and inventory
+                        modifications.
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleMarkAllRead}
-                        className="px-3 py-1.5 bg-white border border-[#eadfda] hover:bg-gray-50 text-[#70283b] text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <CheckCheck className="w-3.5 h-3.5" />
-                        <span>Mark All as Read</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={handleMarkAllRead}
+                      className="px-3 py-1.5 border text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--primary)',
+                      }}
+                    >
+                      <CheckCheck className="w-3.5 h-3.5" />
+                      <span>Mark All as Read</span>
+                    </button>
                   </div>
 
-                  {/* Filter Pills */}
-                  <div className="flex items-center gap-1.5 border-b border-[#eadfda] pb-2 text-xs">
-                    <span className="text-[#776c6b] flex items-center gap-1 mr-2 text-[11px] font-semibold uppercase">
+                  {/* Filter Buttons */}
+                  <div
+                    className="flex items-center gap-1.5 border-b pb-2 text-xs"
+                    style={{ borderColor: 'var(--border)' }}
+                  >
+                    <span
+                      className="flex items-center gap-1 mr-2 text-[11px] font-semibold uppercase"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
                       <Filter className="w-3 h-3" /> Filter:
                     </span>
-                    {(['all', 'order', 'inventory', 'status'] as const).map((filter) => (
-                      <button
-                        key={filter}
-                        type="button"
-                        onClick={() => setActivityFilter(filter)}
-                        className={`px-3 py-1 rounded-full text-xs font-medium capitalize transition-colors cursor-pointer ${
-                          activityFilter === filter
-                            ? 'bg-[#70283b] text-white'
-                            : 'bg-[#fcf9f5] text-[#776c6b] hover:bg-[#f8eeeb] hover:text-[#70283b]'
-                        }`}
-                      >
-                        {filter === 'all'
-                          ? 'All Events'
-                          : filter === 'order'
-                          ? 'Orders'
-                          : filter === 'inventory'
-                          ? 'Inventory'
-                          : 'Status Updates'}
-                      </button>
-                    ))}
+                    {(['all', 'order', 'inventory', 'status'] as const).map((filter) => {
+                      const active = activityFilter === filter;
+                      return (
+                        <button
+                          key={filter}
+                          type="button"
+                          onClick={() => setActivityFilter(filter)}
+                          className="px-3 py-1 rounded-lg text-xs font-medium capitalize transition-colors cursor-pointer"
+                          style={{
+                            backgroundColor: active ? 'var(--primary)' : 'var(--surface-elevated)',
+                            color: active ? 'var(--btn-text)' : 'var(--text-muted)',
+                          }}
+                        >
+                          {filter === 'all'
+                            ? 'All Events'
+                            : filter === 'order'
+                            ? 'Orders'
+                            : filter === 'inventory'
+                            ? 'Inventory'
+                            : 'Status Updates'}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Activity Timeline List */}
                   {filteredActivities.length === 0 ? (
-                    <div className="p-12 text-center bg-white border border-[#eadfda] rounded-xl text-xs text-[#776c6b]">
+                    <div
+                      className="p-12 text-center border rounded-xl text-xs"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
                       No activity events found for the selected filter.
                     </div>
                   ) : (
@@ -1044,41 +1584,56 @@ useEffect(() => {
                       {filteredActivities.map((act) => (
                         <div
                           key={act.id}
-                          className={`p-4 rounded-xl border transition-all flex items-start gap-3.5 ${
-                            act.read
-                              ? 'bg-white border-[#eadfda]'
-                              : 'bg-[#fffaf9] border-[#e8c5b9] shadow-xs'
-                          }`}
+                          className="p-4 rounded-xl border transition-all flex items-start gap-3.5"
+                          style={{
+                            backgroundColor: act.read
+                              ? 'var(--surface)'
+                              : 'var(--surface-elevated)',
+                            borderColor: act.read ? 'var(--border)' : 'var(--primary)',
+                          }}
                         >
                           <div className="shrink-0 mt-0.5">
-                            {act.type === 'order' && (
-                              <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center">
+                            <div
+                              className="w-8 h-8 rounded-full flex items-center justify-center border"
+                              style={{
+                                backgroundColor: 'var(--surface-elevated)',
+                                borderColor: 'var(--border)',
+                                color: 'var(--primary)',
+                              }}
+                            >
+                              {act.type === 'order' ? (
                                 <ShoppingBag className="w-4 h-4" />
-                              </div>
-                            )}
-                            {act.type === 'inventory' && (
-                              <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center">
+                              ) : act.type === 'inventory' ? (
                                 <Package className="w-4 h-4" />
-                              </div>
-                            )}
-                            {act.type === 'status' && (
-                              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-800 flex items-center justify-center">
+                              ) : (
                                 <Clock className="w-4 h-4" />
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </div>
 
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-2">
-                              <h4 className="font-semibold text-xs text-[#292222] flex items-center gap-2">
+                              <h4
+                                className="font-semibold text-xs flex items-center gap-2"
+                                style={{ color: 'var(--text-main)' }}
+                              >
                                 <span>{act.title}</span>
                                 {!act.read && (
-                                  <span className="px-1.5 py-0.2 bg-red-100 text-red-700 text-[9px] font-bold rounded uppercase">
+                                  <span
+                                    className="px-1.5 py-0.5 text-[9px] font-bold rounded uppercase"
+                                    style={{
+                                      backgroundColor: 'var(--primary)',
+                                      color: 'var(--btn-text)',
+                                    }}
+                                  >
                                     New
                                   </span>
                                 )}
                               </h4>
-                              <span className="text-[10px] text-[#776c6b] font-mono whitespace-nowrap">
+                              <span
+                                className="text-[10px] font-mono whitespace-nowrap tabular-nums"
+                                style={{ color: 'var(--text-muted)' }}
+                              >
                                 {new Date(act.timestamp).toLocaleString('en-IN', {
                                   month: 'short',
                                   day: 'numeric',
@@ -1087,7 +1642,10 @@ useEffect(() => {
                                 })}
                               </span>
                             </div>
-                            <p className="text-xs text-[#776c6b] mt-0.5 leading-relaxed">
+                            <p
+                              className="text-xs mt-0.5 leading-relaxed"
+                              style={{ color: 'var(--text-muted)' }}
+                            >
                               {act.detail}
                             </p>
                           </div>
@@ -1096,6 +1654,749 @@ useEffect(() => {
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* TAB 5: STORE SETTINGS (Complete Merchant Store Settings Management) */}
+              {activeTab === 'settings' && (
+                <form onSubmit={handleSaveSettings} className="space-y-6">
+                  <div
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b"
+                    style={{ borderColor: 'var(--border)' }}
+                  >
+                    <div>
+                      <h3
+                        className="font-serif text-2xl font-semibold"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Store Settings & Business Profile
+                      </h3>
+                      <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                        Manage your brand identity, announcement bar, contact details, social links,
+                        policies, and checkout payment methods. Separate from Theme & Cover Photo.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStoreSettings({ ...DEFAULT_STORE_SETTINGS });
+                          setBanner({
+                            type: 'info',
+                            message:
+                              'Default values loaded into form. Click "Save Store Settings" to apply.',
+                          });
+                        }}
+                        className="px-3.5 py-2.5 rounded-lg border text-xs font-semibold cursor-pointer transition-colors"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        Load Defaults
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={isSavingSettings}
+                        className="px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer disabled:opacity-50 shadow-xs"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        {isSavingSettings ? 'Saving...' : 'Save Store Settings'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SECTION 1: Brand Identity, Logo & Homepage Messaging */}
+                  <div
+                    className="p-5 rounded-xl border space-y-4"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <h4
+                      className="font-serif text-lg font-semibold"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      1. Brand Identity, Logo & Homepage Messaging
+                    </h4>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label
+                          htmlFor="setting-store-name"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Store / Brand Name
+                        </label>
+                        <input
+                          id="setting-store-name"
+                          type="text"
+                          value={storeSettings.storeName}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, storeName: e.target.value })
+                          }
+                          placeholder="e.g. Indian Ishq Collection"
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-tagline"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Homepage Hero Tagline
+                        </label>
+                        <input
+                          id="setting-tagline"
+                          type="text"
+                          value={storeSettings.tagline}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, tagline: e.target.value })
+                          }
+                          placeholder="e.g. Timeless Indian silhouettes, woven with ishq."
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="setting-announcement"
+                        className="block text-xs font-semibold uppercase mb-1"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        Store Announcement / Top Banner Text
+                      </label>
+                      <input
+                        id="setting-announcement"
+                        type="text"
+                        value={storeSettings.announcementText}
+                        onChange={(e) =>
+                          setStoreSettings({ ...storeSettings, announcementText: e.target.value })
+                        }
+                        placeholder="e.g. Complimentary express shipping on orders above ₹1,999 · Handcrafted Indian Ethnic Wear"
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="setting-description"
+                        className="block text-xs font-semibold uppercase mb-1"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        Store / Brand Description (Hero & Footer)
+                      </label>
+                      <textarea
+                        id="setting-description"
+                        rows={2}
+                        value={storeSettings.brandDescription}
+                        onChange={(e) =>
+                          setStoreSettings({ ...storeSettings, brandDescription: e.target.value })
+                        }
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    {/* Logo Image Upload & URL */}
+                    <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+                      <label
+                        htmlFor="setting-logo-url"
+                        className="block text-xs font-semibold uppercase mb-1.5"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        Store Logo Image (Optional — Displayed in Header & Footer)
+                      </label>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                        {storeSettings.logoUrl && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <img
+                              src={storeSettings.logoUrl}
+                              alt="Store logo preview"
+                              referrerPolicy="no-referrer"
+                              className="w-11 h-11 rounded-lg object-cover border"
+                              style={{ borderColor: 'var(--border)' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setStoreSettings({ ...storeSettings, logoUrl: '' })}
+                              className="text-xs underline cursor-pointer"
+                              style={{ color: 'var(--error-text)' }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                        <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <input
+                            id="setting-logo-url"
+                            type="url"
+                            value={storeSettings.logoUrl.startsWith('data:') ? '' : storeSettings.logoUrl}
+                            onChange={(e) =>
+                              setStoreSettings({ ...storeSettings, logoUrl: e.target.value })
+                            }
+                            placeholder="Paste direct logo image URL..."
+                            className="w-full p-2.5 border rounded-lg text-xs"
+                            style={{
+                              backgroundColor: 'var(--input-bg)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-main)',
+                            }}
+                          />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            aria-label="Upload store logo image file"
+                            onChange={handleLogoFileChange}
+                            className="w-full p-2 border rounded-lg text-xs cursor-pointer"
+                            style={{
+                              backgroundColor: 'var(--input-bg)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-secondary)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECTION 2: Business Contact, Address, Maps & Hours */}
+                  <div
+                    className="p-5 rounded-xl border space-y-4"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <h4
+                      className="font-serif text-lg font-semibold"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      2. Business Contact, Address & Hours
+                    </h4>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label
+                          htmlFor="setting-phone"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Business Phone Number
+                        </label>
+                        <input
+                          id="setting-phone"
+                          type="text"
+                          value={storeSettings.phone}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, phone: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs tabular-nums"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-whatsapp"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          WhatsApp Number (with Country Code, e.g. 919876543210)
+                        </label>
+                        <input
+                          id="setting-whatsapp"
+                          type="text"
+                          value={storeSettings.whatsapp}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, whatsapp: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs tabular-nums"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-email"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Business Email
+                        </label>
+                        <input
+                          id="setting-email"
+                          type="email"
+                          value={storeSettings.email}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, email: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-maps"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Google Maps URL
+                        </label>
+                        <input
+                          id="setting-maps"
+                          type="url"
+                          value={storeSettings.mapsUrl}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, mapsUrl: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-weekday-hours"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Monday – Saturday Hours
+                        </label>
+                        <input
+                          id="setting-weekday-hours"
+                          type="text"
+                          value={storeSettings.weekdayHours}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, weekdayHours: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-sunday-hours"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Sunday Hours
+                        </label>
+                        <input
+                          id="setting-sunday-hours"
+                          type="text"
+                          value={storeSettings.sundayHours}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, sundayHours: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="setting-address"
+                        className="block text-xs font-semibold uppercase mb-1"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        Business / Boutique Address
+                      </label>
+                      <input
+                        id="setting-address"
+                        type="text"
+                        value={storeSettings.address}
+                        onChange={(e) =>
+                          setStoreSettings({ ...storeSettings, address: e.target.value })
+                        }
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* SECTION 3: Social Media Links */}
+                  <div
+                    className="p-5 rounded-xl border space-y-4"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <h4
+                      className="font-serif text-lg font-semibold"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      3. Social Media URLs
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label
+                          htmlFor="setting-instagram"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Instagram URL
+                        </label>
+                        <input
+                          id="setting-instagram"
+                          type="url"
+                          value={storeSettings.instagramUrl}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, instagramUrl: e.target.value })
+                          }
+                          placeholder="https://instagram.com/..."
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-facebook"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Facebook URL
+                        </label>
+                        <input
+                          id="setting-facebook"
+                          type="url"
+                          value={storeSettings.facebookUrl}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, facebookUrl: e.target.value })
+                          }
+                          placeholder="https://facebook.com/..."
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-twitter"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Twitter / X URL
+                        </label>
+                        <input
+                          id="setting-twitter"
+                          type="url"
+                          value={storeSettings.twitterUrl}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, twitterUrl: e.target.value })
+                          }
+                          placeholder="https://twitter.com/..."
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECTION 4: Delivery, Shipping, Return & Exchange Policies */}
+                  <div
+                    className="p-5 rounded-xl border space-y-4"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <h4
+                      className="font-serif text-lg font-semibold"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      4. Delivery, Shipping & Return Policies
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label
+                          htmlFor="setting-delivery-policy"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Delivery Information & Shipping Policy
+                        </label>
+                        <textarea
+                          id="setting-delivery-policy"
+                          rows={3}
+                          value={storeSettings.deliveryPolicy}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, deliveryPolicy: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs leading-relaxed"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-return-policy"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Return & Exchange Policy
+                        </label>
+                        <textarea
+                          id="setting-return-policy"
+                          rows={3}
+                          value={storeSettings.returnPolicy}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, returnPolicy: e.target.value })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs leading-relaxed"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECTION 5: Available Payment Methods & Gateway Configuration */}
+                  <div
+                    className="p-5 rounded-xl border space-y-4"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <h4
+                      className="font-serif text-lg font-semibold"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      5. Available Payment Methods & Gateway Configuration
+                    </h4>
+
+                    {/* Payment Method Toggles */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <label
+                        className="p-3.5 rounded-lg border flex items-start gap-3 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface)',
+                          borderColor: storeSettings.codEnabled ? 'var(--primary)' : 'var(--border)',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={storeSettings.codEnabled}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, codEnabled: e.target.checked })
+                          }
+                          className="mt-0.5 accent-current"
+                        />
+                        <div>
+                          <span className="block text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
+                            Cash on Delivery (COD)
+                          </span>
+                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            Pay upon doorstep delivery
+                          </span>
+                        </div>
+                      </label>
+
+                      <label
+                        className="p-3.5 rounded-lg border flex items-start gap-3 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface)',
+                          borderColor: storeSettings.upiEnabled ? 'var(--primary)' : 'var(--border)',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={storeSettings.upiEnabled}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, upiEnabled: e.target.checked })
+                          }
+                          className="mt-0.5 accent-current"
+                        />
+                        <div>
+                          <span className="block text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
+                            Dynamic UPI QR
+                          </span>
+                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            GPay, PhonePe, Paytm QR
+                          </span>
+                        </div>
+                      </label>
+
+                      <label
+                        className="p-3.5 rounded-lg border flex items-start gap-3 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface)',
+                          borderColor: storeSettings.razorpayEnabled
+                            ? 'var(--primary)'
+                            : 'var(--border)',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={storeSettings.razorpayEnabled}
+                          onChange={(e) =>
+                            setStoreSettings({
+                              ...storeSettings,
+                              razorpayEnabled: e.target.checked,
+                            })
+                          }
+                          className="mt-0.5 accent-current"
+                        />
+                        <div>
+                          <span className="block text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
+                            Razorpay Online
+                          </span>
+                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            Requires public Key ID below
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                      <div>
+                        <label
+                          htmlFor="setting-upi-vpa"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Merchant UPI VPA Address
+                        </label>
+                        <input
+                          id="setting-upi-vpa"
+                          type="text"
+                          value={storeSettings.upiVpa}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, upiVpa: e.target.value })
+                          }
+                          placeholder="e.g. indianishq@okaxis"
+                          className="w-full p-2.5 border rounded-lg text-xs font-mono"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-razorpay-key"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Razorpay Public Key ID (Optional: rzp_test_... / rzp_live_...)
+                        </label>
+                        <input
+                          id="setting-razorpay-key"
+                          type="text"
+                          value={storeSettings.razorpayKeyId}
+                          onChange={(e) =>
+                            setStoreSettings({ ...storeSettings, razorpayKeyId: e.target.value })
+                          }
+                          placeholder="Leave blank if not using Razorpay yet"
+                          className="w-full p-2.5 border rounded-lg text-xs font-mono"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3 pt-2">
+                    <button
+                      type="submit"
+                      disabled={isSavingSettings}
+                      className="px-6 py-3 rounded-lg text-xs font-semibold uppercase tracking-widest cursor-pointer disabled:opacity-50 shadow-sm"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
+                    >
+                      {isSavingSettings ? 'Saving Settings...' : 'Save Store Settings'}
+                    </button>
+                  </div>
+                </form>
               )}
             </div>
           )}
@@ -1111,8 +2412,6 @@ useEffect(() => {
           onCatalogChanged();
         }}
       />
-
     </div>
   );
 };
-

@@ -32,13 +32,45 @@
           "type": "array",
           "description": "List of ordered items with quantities"
         },
-        "payment_method": { "type": "string", "description": "UPI or COD" },
+        "payment_method": { "type": "string", "description": "UPI, COD, or RAZORPAY" },
         "upi_ref_id": { "type": "string", "description": "UPI transaction reference ID if applicable" },
+        "razorpay_payment_id": { "type": "string", "description": "Razorpay payment ID if paid via Razorpay" },
         "status": { "type": "string", "description": "Order status: Confirmed, Packed, Shipped, Delivered, Cancelled" },
         "total": { "type": "number", "description": "Order total in INR" },
         "created_at": { "type": "string", "description": "ISO timestamp of order creation" }
       },
       "required": ["id", "customer_details", "items", "payment_method", "status", "total"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Merchant-editable store brand identity, tagline, announcement, contact info, hours, social links, delivery/return policies, UPI VPA, and payment gateway configuration.",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string" },
+        "tagline": { "type": "string" },
+        "brandDescription": { "type": "string" },
+        "announcementText": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "email": { "type": "string" },
+        "weekdayHours": { "type": "string" },
+        "sundayHours": { "type": "string" },
+        "address": { "type": "string" },
+        "mapsUrl": { "type": "string" },
+        "instagramUrl": { "type": "string" },
+        "facebookUrl": { "type": "string" },
+        "twitterUrl": { "type": "string" },
+        "deliveryPolicy": { "type": "string" },
+        "returnPolicy": { "type": "string" },
+        "codEnabled": { "type": "boolean" },
+        "upiEnabled": { "type": "boolean" },
+        "upiVpa": { "type": "string" },
+        "razorpayEnabled": { "type": "boolean" },
+        "razorpayKeyId": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["storeName", "phone", "email"]
     }
   },
   "firestore": {
@@ -49,6 +81,10 @@
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },
       "description": "Store customer orders and fulfillment status"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/StoreSettings" },
+      "description": "Storefront configuration and merchant contact/payment settings"
     }
   }
 }

@@ -2,6 +2,17 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Product, CartItem, Order } from './utils/ecommerce';
 import { initialProducts } from './utils/ecommerce';
 import {
+  COORDINATED_THEMES,
+  resolveThemeById,
+  resolveAppearanceMode,
+  applyThemeToDocument,
+  THEME_STORAGE_KEY,
+  LEGACY_THEME_STORAGE_KEY,
+  APPEARANCE_MANUAL_KEY,
+  type CoordinatedTheme,
+  type AppearanceMode,
+} from './utils/themes';
+import {
   fetchProducts,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
@@ -9,28 +20,20 @@ import {
   verifyAdminSession,
   setStoredToken,
 } from './services/api';
+import {
+  type StoreSettings,
+  getLocalStoreSettings,
+  fetchStoreSettings,
+  subscribeToStoreSettings,
+} from './services/settings';
 import { Storefront } from './components/Storefront';
+import { ProductDetailModal } from './components/ProductDetailModal';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Toast, type ToastData } from './components/Toast';
-
-interface StoreTheme {
-  name: string;
-  wine: string;
-  wine2: string;
-  rose: string;
-  cream: string;
-  gold: string;
-}
-
-const THEME_PRESETS: StoreTheme[] = [
-  { name: 'Royal Wine (Default)', wine: '#70283b', wine2: '#4c1727', rose: '#f3dfe0', cream: '#fbf7f0', gold: '#b78a4b' },
-  { name: 'Bridal Crimson', wine: '#8b1e24', wine2: '#5a1015', rose: '#fce8e8', cream: '#fffaf5', gold: '#d4af37' },
-  { name: 'Emerald Maharani', wine: '#134e4a', wine2: '#0f2926', rose: '#e0f2f1', cream: '#f9fbf9', gold: '#c59b27' },
-  { name: 'Midnight Peacock', wine: '#1e293b', wine2: '#0f172a', rose: '#e2e8f0', cream: '#f8fafc', gold: '#ca8a04' },
-  { name: 'Rosewater Pastel', wine: '#9d174d', wine2: '#500724', rose: '#fce7f3', cream: '#fffbfd', gold: '#b45309' },
-];
+import { Footer } from './components/Footer';
+import { Palette, Sun, Moon, Monitor, Check, X, Upload } from 'lucide-react';
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>(() => {
@@ -48,6 +51,7 @@ export default function App() {
 
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
@@ -65,63 +69,159 @@ export default function App() {
   });
   const [isCustomizerOpen, setIsCustomizerOpen] = useState<boolean>(false);
 
-const [isMerchantAuthenticated, setIsMerchantAuthenticated] =
-  useState<boolean>(false);
+  const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => getLocalStoreSettings());
 
-const handleMerchantAuthChange = useCallback(
-  (authenticated: boolean) => {
-    setIsMerchantAuthenticated(authenticated);
-  },
-  []
-);
-useEffect(() => {
-  let cancelled = false;
+  useEffect(() => {
+    fetchStoreSettings().then(setStoreSettings).catch(() => {});
+    const unsub = subscribeToStoreSettings((live) => setStoreSettings(live));
 
-  const restoreMerchantSession = async () => {
-    try {
-      const token = getStoredToken();
-
-      if (!token) {
-        if (!cancelled) {
-          setIsMerchantAuthenticated(false);
-        }
-        return;
+    const handleLocalUpdate = (e: Event) => {
+      const custom = e as CustomEvent<StoreSettings>;
+      if (custom.detail) {
+        setStoreSettings(custom.detail);
+      } else {
+        setStoreSettings(getLocalStoreSettings());
       }
+    };
+    window.addEventListener('ishq:settings-updated', handleLocalUpdate);
+    return () => {
+      unsub();
+      window.removeEventListener('ishq:settings-updated', handleLocalUpdate);
+    };
+  }, []);
 
-      const valid = await verifyAdminSession(token);
+  useEffect(() => {
+    if (typeof document !== 'undefined' && storeSettings.storeName) {
+      document.title = `${storeSettings.storeName} — Handcrafted Indian Ethnic Wear`;
+    }
+  }, [storeSettings.storeName]);
 
-      if (cancelled) return;
+  const [isMerchantAuthenticated, setIsMerchantAuthenticated] = useState<boolean>(false);
 
-      setIsMerchantAuthenticated(valid);
+  const handleMerchantAuthChange = useCallback((authenticated: boolean) => {
+    setIsMerchantAuthenticated(authenticated);
+  }, []);
 
-      if (!valid) {
+  useEffect(() => {
+    let cancelled = false;
+
+    const restoreMerchantSession = async () => {
+      try {
+        const token = getStoredToken();
+        if (!token) {
+          if (!cancelled) {
+            setIsMerchantAuthenticated(false);
+          }
+          return;
+        }
+
+        const valid = await verifyAdminSession(token);
+        if (cancelled) return;
+
+        setIsMerchantAuthenticated(valid);
+        if (!valid) {
+          setStoredToken(null);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error('Merchant session verification failed:', err);
+        setIsMerchantAuthenticated(false);
         setStoredToken(null);
       }
-    } catch (error) {
-      if (cancelled) return;
+    };
 
-      console.error('Merchant session verification failed:', error);
+    restoreMerchantSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-      setIsMerchantAuthenticated(false);
-      setStoredToken(null);
-    }
-  };
-
-  restoreMerchantSession();
-
-  return () => {
-    cancelled = true;
-  };
-}, []);
-  const [theme, setTheme] = useState<StoreTheme>(() => {
+  // 1. Coordinated Theme Palette State (6 curated themes)
+  const [activeTheme, setActiveTheme] = useState<CoordinatedTheme>(() => {
     try {
-      const saved = localStorage.getItem('ishq_theme');
-      return saved ? JSON.parse(saved) : THEME_PRESETS[0];
+      const savedId =
+        localStorage.getItem(THEME_STORAGE_KEY) ||
+        localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
+      return resolveThemeById(savedId);
     } catch {
-      return THEME_PRESETS[0];
+      return COORDINATED_THEMES[0];
     }
   });
 
+  // 2. Appearance Mode State (Manual Override vs System Preference)
+  const [manualAppearance, setManualAppearance] = useState<'light' | 'dark' | null>(() => {
+    try {
+      const saved = localStorage.getItem(APPEARANCE_MANUAL_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {}
+    return null;
+  });
+
+  const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
+
+  // Listen to device color scheme changes dynamically
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    const handleChange = (e: MediaQueryListEvent) => {
+      setSystemPrefersDark(e.matches);
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
+  const appearanceMode: AppearanceMode = resolveAppearanceMode(
+    manualAppearance,
+    systemPrefersDark
+  );
+
+  // Apply theme tokens and appearance mode to <html> immediately whenever either changes
+  useEffect(() => {
+    applyThemeToDocument(activeTheme, appearanceMode);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, activeTheme.id);
+      localStorage.setItem(
+        LEGACY_THEME_STORAGE_KEY,
+        JSON.stringify({
+          id: activeTheme.id,
+          name: activeTheme.name,
+          wine: activeTheme.swatches.primary,
+          wine2: activeTheme.light.primaryHover,
+          rose: activeTheme.swatches.secondary,
+          cream: activeTheme.swatches.bg,
+          gold: activeTheme.swatches.accent,
+        })
+      );
+    } catch {}
+  }, [activeTheme, appearanceMode]);
+
+  const handleToggleAppearance = useCallback(() => {
+    const nextMode: AppearanceMode = appearanceMode === 'dark' ? 'light' : 'dark';
+    setManualAppearance(nextMode);
+    try {
+      localStorage.setItem(APPEARANCE_MANUAL_KEY, nextMode);
+    } catch {}
+  }, [appearanceMode]);
+
+  const handleSetManualAppearance = useCallback((mode: 'light' | 'dark' | null) => {
+    setManualAppearance(mode);
+    try {
+      if (mode === null) {
+        localStorage.removeItem(APPEARANCE_MANUAL_KEY);
+      } else {
+        localStorage.setItem(APPEARANCE_MANUAL_KEY, mode);
+      }
+    } catch {}
+  }, []);
+
+  // Cover Photo State
   const [coverPhoto, setCoverPhoto] = useState<string>(() => {
     try {
       return localStorage.getItem('ishq_cover_photo') || '';
@@ -129,6 +229,16 @@ useEffect(() => {
       return '';
     }
   });
+
+  useEffect(() => {
+    try {
+      if (coverPhoto) {
+        localStorage.setItem('ishq_cover_photo', coverPhoto);
+      } else {
+        localStorage.removeItem('ishq_cover_photo');
+      }
+    } catch {}
+  }, [coverPhoto]);
 
   const [unreadOrdersCount, setUnreadOrdersCount] = useState<number>(0);
   const knownOrderIdsRef = useRef<Set<string>>(new Set());
@@ -146,7 +256,9 @@ useEffect(() => {
 
   const playOrderChime = useCallback(() => {
     try {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new AudioCtx();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -161,33 +273,6 @@ useEffect(() => {
       osc.stop(ctx.currentTime + 0.6);
     } catch {}
   }, []);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty('--wine', theme.wine);
-    root.style.setProperty('--wine2', theme.wine2);
-    root.style.setProperty('--rose', theme.rose);
-    root.style.setProperty('--cream', theme.cream);
-    root.style.setProperty('--gold', theme.gold);
-    try {
-      localStorage.setItem('ishq_theme', JSON.stringify(theme));
-    } catch {}
-  }, [theme]);
-
-  useEffect(() => {
-    if (!coverPhoto) return;
-    try {
-      localStorage.setItem('ishq_cover_photo', coverPhoto);
-    } catch {}
-
-    const timer = setTimeout(() => {
-      const imgs = document.querySelectorAll('section img, header img');
-      if (imgs.length > 0) {
-        (imgs[0] as HTMLImageElement).src = coverPhoto;
-      }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [coverPhoto, products, isAdminOpen]);
 
   useEffect(() => {
     const unsubscribeOrders = subscribeToFirestoreOrders((liveOrders) => {
@@ -207,7 +292,7 @@ useEffect(() => {
           const latest = brandNewOrders[0];
           showToast({
             type: 'order',
-            title: '🔔 New Customer Order Received!',
+            title: 'New Customer Order Received',
             message: `Order #${latest.id} (₹${latest.total.toLocaleString('en-IN')}) from ${latest.customer_details.name}`,
             actionLabel: 'Open Orders',
             onAction: () => {
@@ -252,7 +337,7 @@ useEffect(() => {
       if (live && live.length > 0) {
         setProducts(live);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn('Live products fetch notice:', err);
     }
   }, [activeCategory, searchQuery]);
@@ -263,7 +348,9 @@ useEffect(() => {
     const unsubscribe = subscribeToFirestoreProducts((liveItems) => {
       let filtered = [...liveItems];
       if (activeCategory && activeCategory !== 'All') {
-        filtered = filtered.filter((p) => p.category.toLowerCase() === activeCategory.toLowerCase());
+        filtered = filtered.filter(
+          (p) => p.category.toLowerCase() === activeCategory.toLowerCase()
+        );
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
@@ -290,7 +377,7 @@ useEffect(() => {
         setCoverPhoto(reader.result);
         showToast({
           type: 'info',
-          title: 'Cover Photo Updated ✨',
+          title: 'Cover Photo Updated',
           message: 'New cover photo applied to the storefront hero banner.',
         });
       }
@@ -300,7 +387,11 @@ useEffect(() => {
 
   const handleAddToCart = (product: Product) => {
     if (product.stock <= 0) {
-      showToast({ type: 'error', title: 'Sold Out', message: `"${product.name}" is out of stock.` });
+      showToast({
+        type: 'error',
+        title: 'Sold Out',
+        message: `"${product.name}" is out of stock.`,
+      });
       return;
     }
 
@@ -308,12 +399,22 @@ useEffect(() => {
       const existing = prev.find((item) => item.id === product.id);
       if (existing) {
         if (existing.qty >= product.stock) {
-          showToast({ type: 'error', title: 'Stock Limit Reached', message: `Only ${product.stock} available.` });
+          showToast({
+            type: 'error',
+            title: 'Stock Limit Reached',
+            message: `Only ${product.stock} available.`,
+          });
           return prev;
         }
-        return prev.map((item) => (item.id === product.id ? { ...item, qty: item.qty + 1 } : item));
+        return prev.map((item) =>
+          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
+        );
       }
-      showToast({ type: 'cart', title: 'Added to Bag ✨', message: `"${product.name}" added to bag.` });
+      showToast({
+        type: 'cart',
+        title: 'Added to Shopping Bag',
+        message: `"${product.name}" added to your bag.`,
+      });
       return [...prev, { id: product.id, qty: 1 }];
     });
   };
@@ -343,7 +444,7 @@ useEffect(() => {
 
     showToast({
       type: 'order',
-      title: 'Order Confirmed! 🎉',
+      title: 'Order Confirmed',
       message: `Order #${order.id} (₹${order.total.toLocaleString('en-IN')}) placed successfully.`,
       actionLabel: 'Merchant Workspace',
       onAction: () => {
@@ -364,89 +465,180 @@ useEffect(() => {
         activeCategory={activeCategory}
         searchQuery={searchQuery}
         cartCount={cartCount}
+        coverPhoto={coverPhoto}
+        activeTheme={activeTheme}
+        themes={COORDINATED_THEMES}
+        appearanceMode={appearanceMode}
+        storeSettings={storeSettings}
+        isMerchantAuthenticated={isMerchantAuthenticated}
         onCategoryChange={setActiveCategory}
         onSearchChange={setSearchQuery}
         onAddToCart={handleAddToCart}
-        onWishlistClick={(prod) => showToast(`Saved "${prod.name}" to wishlist`)}
+        onWishlistClick={(prod) => showToast(`Saved "${prod.name}" to your wishlist`)}
+        onSelectProduct={setSelectedProduct}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenMerchant={() => {
           setIsAdminOpen(true);
           setUnreadOrdersCount(0);
         }}
         onRetryFetch={loadLiveProducts}
+        onSelectTheme={setActiveTheme}
+        onToggleAppearance={handleToggleAppearance}
+        onOpenThemeModal={() => setIsCustomizerOpen(true)}
       />
 
-      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2.5 items-end">
+      <Footer
+        storeSettings={storeSettings}
+        onOpenMerchant={() => {
+          setIsAdminOpen(true);
+          setUnreadOrdersCount(0);
+        }}
+      />
+
+      {/* Floating Quick-Access Theme & Order Notification Controls */}
+      <div className="fixed bottom-5 right-5 z-40 flex flex-col gap-2.5 items-end">
         {unreadOrdersCount > 0 && isMerchantAuthenticated && (
           <button
+            type="button"
             onClick={() => {
               setIsAdminOpen(true);
               setUnreadOrdersCount(0);
             }}
-            className="bg-red-600 text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 animate-bounce"
+            className="px-4 py-2.5 rounded-lg shadow-xl font-semibold text-xs flex items-center gap-2 border cursor-pointer"
+            style={{
+              backgroundColor: 'var(--error-bg)',
+              borderColor: 'var(--error-border)',
+              color: 'var(--error-text)',
+            }}
           >
-            <span>🔔 {unreadOrdersCount} New Order{unreadOrdersCount > 1 ? 's' : ''}!</span>
-            <span className="underline text-xs">View</span>
+            <span>
+              {unreadOrdersCount} New Order{unreadOrdersCount > 1 ? 's' : ''}
+            </span>
+            <span className="underline">View</span>
           </button>
         )}
 
         <button
+          type="button"
           onClick={() => setIsCustomizerOpen(true)}
-          style={{ backgroundColor: 'var(--wine)' }}
-          className="text-white px-4 py-2.5 rounded-full shadow-2xl font-semibold text-sm flex items-center gap-2 border border-white/30"
+          aria-label="Customize store theme and appearance"
+          className="px-4 py-2.5 rounded-lg shadow-xl font-semibold text-xs flex items-center gap-2 border transition-transform hover:-translate-y-0.5 cursor-pointer"
+          style={{
+            backgroundColor: 'var(--primary)',
+            color: 'var(--btn-text)',
+            borderColor: 'var(--border)',
+          }}
         >
-          🎨 {isMerchantAuthenticated ? 'Theme & Cover Photo' : 'Color Theme'}
+          <Palette className="w-4 h-4 shrink-0" />
+          <span>{isMerchantAuthenticated ? 'Theme & Cover Photo' : 'Colour Theme'}</span>
         </button>
       </div>
 
+      {/* Theme Palette & Appearance Customizer Modal */}
       {isCustomizerOpen && (
-        <div className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b pb-3 mb-4">
-              <h3 className="text-lg font-bold text-gray-900">
-                {isMerchantAuthenticated ? 'Store Theme & Cover Photo' : 'Choose Store Color Theme'}
-              </h3>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="theme-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'var(--overlay)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCustomizerOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-xl border p-6 shadow-2xl max-h-[90vh] overflow-y-auto transition-colors"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+              color: 'var(--text-main)',
+            }}
+          >
+            <div
+              className="flex justify-between items-center border-b pb-4 mb-5"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              <div>
+                <h3 id="theme-modal-title" className="font-serif text-2xl font-semibold">
+                  {isMerchantAuthenticated
+                    ? 'Store Theme, Appearance & Cover Photo'
+                    : 'Theme & Appearance Settings'}
+                </h3>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  Each colour palette adapts smoothly to Light and Dark appearance modes.
+                </p>
+              </div>
               <button
+                type="button"
                 onClick={() => setIsCustomizerOpen(false)}
-                className="text-gray-500 hover:text-gray-800 text-xl font-bold px-2"
+                aria-label="Close theme customizer"
+                className="w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
+            {/* Merchant-Only Hero Cover Photo Section */}
             {isMerchantAuthenticated && (
-              <div className="mb-6 p-3.5 bg-pink-50/60 border border-pink-200 rounded-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-sm font-bold text-gray-900">
-                    📸 Merchant Cover Photo (Hero Banner)
-                  </label>
-                  <span className="text-[11px] bg-pink-900 text-white px-2 py-0.5 rounded-full">
-                    Admin Only
+              <div
+                className="mb-6 p-4 rounded-xl border space-y-3"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                    <Upload className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
+                    <span>Merchant Hero Cover Photo</span>
+                  </span>
+                  <span
+                    className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                    style={{
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
+                    }}
+                  >
+                    Merchant Only
                   </span>
                 </div>
                 <input
                   type="file"
                   accept="image/*"
                   onChange={handleCoverUpload}
-                  className="block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-white file:text-pink-900 hover:file:bg-pink-100 mb-2"
+                  className="block w-full text-xs cursor-pointer"
+                  style={{ color: 'var(--text-secondary)' }}
                 />
                 <input
                   type="url"
                   value={coverPhoto.startsWith('data:') ? '' : coverPhoto}
                   onChange={(e) => setCoverPhoto(e.target.value)}
                   placeholder="Or paste direct image URL here..."
-                  className="w-full border bg-white rounded-lg px-3 py-1.5 text-sm"
+                  className="w-full border rounded-lg px-3 py-2 text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
                 />
                 {coverPhoto && (
-                  <div className="mt-2 flex items-center justify-between">
-                    <span className="text-xs text-green-700 font-medium">✓ Custom Cover Active</span>
+                  <div className="flex items-center justify-between pt-1">
+                    <span
+                      className="text-xs font-medium"
+                      style={{ color: 'var(--success-text)' }}
+                    >
+                      Custom Cover Photo Active
+                    </span>
                     <button
-                      onClick={() => {
-                        setCoverPhoto('');
-                        localStorage.removeItem('ishq_cover_photo');
-                        window.location.reload();
-                      }}
-                      className="text-xs text-red-600 underline"
+                      type="button"
+                      onClick={() => setCoverPhoto('')}
+                      className="text-xs underline cursor-pointer"
+                      style={{ color: 'var(--error-text)' }}
                     >
                       Reset Default Photo
                     </button>
@@ -455,40 +647,157 @@ useEffect(() => {
               </div>
             )}
 
+            {/* 1. Appearance Mode Control (Light / Dark / System Auto) */}
             <div className="mb-6">
-              <label className="block text-sm font-semibold text-gray-800 mb-2">
-                Select Color Palette
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-2.5"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Appearance Mode (Light / Dark)
               </label>
-              <div className="grid grid-cols-1 gap-2">
-                {THEME_PRESETS.map((preset) => (
-                  <button
-                    key={preset.name}
-                    onClick={() => setTheme(preset)}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border text-left transition ${
-                      theme.name === preset.name ? 'border-gray-900 bg-gray-50 font-semibold' : 'border-gray-200'
-                    }`}
-                  >
-                    <span className="text-sm text-gray-800">{preset.name}</span>
-                    <div className="flex gap-1.5">
-                      <span className="w-5 h-5 rounded-full border" style={{ background: preset.wine }} />
-                      <span className="w-5 h-5 rounded-full border" style={{ background: preset.gold }} />
-                      <span className="w-5 h-5 rounded-full border" style={{ background: preset.cream }} />
-                    </div>
-                  </button>
-                ))}
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSetManualAppearance('light')}
+                  className="py-2.5 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor:
+                      manualAppearance === 'light'
+                        ? 'var(--primary)'
+                        : 'var(--surface-elevated)',
+                    color:
+                      manualAppearance === 'light' ? 'var(--btn-text)' : 'var(--text-main)',
+                    borderColor:
+                      manualAppearance === 'light' ? 'var(--primary)' : 'var(--border)',
+                  }}
+                >
+                  <Sun className="w-3.5 h-3.5" />
+                  <span>Light</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSetManualAppearance('dark')}
+                  className="py-2.5 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor:
+                      manualAppearance === 'dark'
+                        ? 'var(--primary)'
+                        : 'var(--surface-elevated)',
+                    color:
+                      manualAppearance === 'dark' ? 'var(--btn-text)' : 'var(--text-main)',
+                    borderColor:
+                      manualAppearance === 'dark' ? 'var(--primary)' : 'var(--border)',
+                  }}
+                >
+                  <Moon className="w-3.5 h-3.5" />
+                  <span>Dark</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSetManualAppearance(null)}
+                  className="py-2.5 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor:
+                      manualAppearance === null
+                        ? 'var(--primary)'
+                        : 'var(--surface-elevated)',
+                    color: manualAppearance === null ? 'var(--btn-text)' : 'var(--text-main)',
+                    borderColor:
+                      manualAppearance === null ? 'var(--primary)' : 'var(--border)',
+                  }}
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  <span>System</span>
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Coordinated Boutique Colour Themes */}
+            <div className="mb-6">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-2.5"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Select Coordinated Colour Palette
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {COORDINATED_THEMES.map((preset) => {
+                  const isSelected = activeTheme.id === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => setActiveTheme(preset)}
+                      className="p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer"
+                      style={{
+                        backgroundColor: isSelected
+                          ? 'var(--surface-elevated)'
+                          : 'var(--surface)',
+                        borderColor: isSelected ? 'var(--primary)' : 'var(--border)',
+                      }}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span
+                          className="text-xs font-semibold flex items-center gap-1.5"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          <span>{preset.name}</span>
+                          {isSelected && (
+                            <Check className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
+                          )}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <span
+                            className="w-4 h-4 rounded-full border border-black/15"
+                            style={{ backgroundColor: preset.swatches.primary }}
+                          />
+                          <span
+                            className="w-4 h-4 rounded-full border border-black/15"
+                            style={{ backgroundColor: preset.swatches.accent }}
+                          />
+                          <span
+                            className="w-4 h-4 rounded-full border border-black/15"
+                            style={{ backgroundColor: preset.swatches.secondary }}
+                          />
+                        </div>
+                      </div>
+                      <span
+                        className="text-[11px] leading-snug line-clamp-1"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {preset.description}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
             <button
+              type="button"
               onClick={() => setIsCustomizerOpen(false)}
-              style={{ backgroundColor: 'var(--wine)' }}
-              className="w-full text-white py-2.5 rounded-xl font-semibold text-sm"
+              className="w-full py-3 rounded-lg font-semibold text-xs uppercase tracking-widest cursor-pointer"
+              style={{
+                backgroundColor: 'var(--primary)',
+                color: 'var(--btn-text)',
+              }}
             >
-              Apply Theme
+              Done
             </button>
           </div>
         </div>
       )}
+
+      {/* Product Quick View / Detail Modal */}
+      <ProductDetailModal
+        product={selectedProduct}
+        storeSettings={storeSettings}
+        onClose={() => setSelectedProduct(null)}
+        onAddToCart={handleAddToCart}
+        onWishlistClick={(prod) => showToast(`Saved "${prod.name}" to your wishlist`)}
+      />
 
       <CartDrawer
         isOpen={isCartOpen}
@@ -508,20 +817,21 @@ useEffect(() => {
         onClose={() => setIsCheckoutOpen(false)}
         cart={cart}
         products={products}
+        storeSettings={storeSettings}
         onOrderSuccess={handleOrderSuccess}
       />
 
       <AdminDashboard
-  isOpen={isAdminOpen}
-  onClose={() => {
-    setIsAdminOpen(false);
-    if (window.location.hash === '#admin') {
-      window.history.pushState(null, '', window.location.pathname);
-    }
-  }}
-  onCatalogChanged={loadLiveProducts}
-  onAuthChange={handleMerchantAuthChange}
-/>
+        isOpen={isAdminOpen}
+        onClose={() => {
+          setIsAdminOpen(false);
+          if (window.location.hash === '#admin') {
+            window.history.pushState(null, '', window.location.pathname);
+          }
+        }}
+        onCatalogChanged={loadLiveProducts}
+        onAuthChange={handleMerchantAuthChange}
+      />
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </>

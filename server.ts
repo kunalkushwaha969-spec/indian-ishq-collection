@@ -251,16 +251,6 @@ app.get('/api/auth/verify', (req: Request, res: Response) => {
   return res.status(403).json({ valid: false });
 });
 
-app.get('/api/supabase/check-dns', (req: Request, res: Response) => {
-  const host = (req.query.host as string) || 'totetycoeeqrsxsduhwx.supabase.co';
-  dns.lookup(host, (err, address) => {
-    if (err) {
-      return res.json({ resolvable: false, code: err.code });
-    }
-    return res.json({ resolvable: true, address });
-  });
-});
-
 // 3. Products Endpoints
 app.get('/api/products', (req: Request, res: Response) => {
   const category = req.query.category as string;
@@ -436,7 +426,6 @@ app.post('/api/upload', requireAdminAuth, (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No image data provided' });
     }
 
-    // In a real cloud bucket, this streams to Supabase or Firebase Storage.
     // For this serverless environment, we safely store in data URLs or static assets.
     res.json({
       success: true,
@@ -459,6 +448,7 @@ async function startServer() {
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
       },
       appType: 'spa',
     });

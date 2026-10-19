@@ -49,7 +49,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mobileCameraInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Clean up camera stream when modal closes
   useEffect(() => {
     return () => {
       stopCameraStream();
@@ -66,7 +65,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Strict format validation helper
   const validateFormat = (file: File): boolean => {
     const typeValid = ALLOWED_MIME_TYPES.includes(file.type.toLowerCase());
     const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
@@ -91,7 +89,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     setErrorMsg(null);
     setImageFile(file);
 
-    // Instant local preview
     const reader = new FileReader();
     reader.onload = () => {
       setPreviewUrl(reader.result as string);
@@ -99,14 +96,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Start Live Webcam Stream
   const handleStartCamera = async () => {
     setCameraError(null);
     setErrorMsg(null);
 
-    // Check mediaDevices support
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      // Fallback directly to mobile camera capture input
       mobileCameraInputRef.current?.click();
       return;
     }
@@ -132,7 +126,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         }
       }, 100);
     } catch {
-      // If webcam permission is denied or device camera unavailable, open native file capture
       setCameraError('Webcam access was denied or unavailable. Opening device camera.');
       setTimeout(() => {
         mobileCameraInputRef.current?.click();
@@ -140,7 +133,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     }
   };
 
-  // Capture Photo from Live Webcam
   const handleCapturePhoto = () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
@@ -177,14 +169,16 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
     let finalImageUrl = imageUrl.trim();
 
-    // If an image file was selected or captured, upload directly to cloud storage first
     if (imageFile) {
       try {
         setIsUploading(true);
         finalImageUrl = await uploadImageDirect(imageFile);
       } catch (err: any) {
         console.warn('[Product Image Fallback]: Cloud storage notice, using local image preview:', err);
-        finalImageUrl = previewUrl || imageUrl.trim() || 'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=800&q=80';
+        finalImageUrl =
+          previewUrl ||
+          imageUrl.trim() ||
+          'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=800&q=80';
       } finally {
         setIsUploading(false);
       }
@@ -223,7 +217,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-product-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/60 backdrop-blur-xs overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      style={{ backgroundColor: 'var(--overlay)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           stopCameraStream();
@@ -231,18 +226,42 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         }
       }}
     >
-      <div className="bg-[#fffdf9] w-full max-w-[620px] rounded-xl shadow-2xl border border-[#eadfda] my-4 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div
+        className="w-full max-w-[620px] rounded-xl shadow-2xl border my-4 overflow-hidden transition-colors"
+        style={{
+          backgroundColor: 'var(--surface)',
+          borderColor: 'var(--border)',
+          color: 'var(--text-main)',
+        }}
+      >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#eadfda] bg-white">
+        <div
+          className="flex items-center justify-between px-6 py-4 border-b"
+          style={{
+            backgroundColor: 'var(--surface-elevated)',
+            borderColor: 'var(--border)',
+          }}
+        >
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-[#f8eeeb] text-[#70283b] rounded-lg">
+            <div
+              className="p-2 rounded-lg border"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--primary)',
+              }}
+            >
               <UploadCloud className="w-5 h-5" />
             </div>
             <div>
-              <h2 id="add-product-title" className="font-serif text-xl sm:text-2xl text-[#70283b]">
+              <h2
+                id="add-product-title"
+                className="font-serif text-xl sm:text-2xl font-semibold"
+                style={{ color: 'var(--text-main)' }}
+              >
                 Add Product to Catalog
               </h2>
-              <span className="text-[11px] text-[#776c6b]">
+              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                 Add a new handcrafted piece to your boutique catalog
               </span>
             </div>
@@ -254,21 +273,40 @@ export const ProductModal: React.FC<ProductModalProps> = ({
               onClose();
             }}
             aria-label="Close product modal"
-            className="text-2xl text-[#70283b] hover:opacity-75 p-1 leading-none cursor-pointer"
+            className="w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+              color: 'var(--text-main)',
+            }}
           >
-            ×
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {errorMsg && (
-          <div className="mx-6 mt-4 p-3 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs rounded-r flex items-center gap-2">
+          <div
+            className="mx-6 mt-4 p-3 rounded-lg border text-xs flex items-center gap-2"
+            style={{
+              backgroundColor: 'var(--error-bg)',
+              borderColor: 'var(--error-border)',
+              color: 'var(--error-text)',
+            }}
+          >
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
         )}
 
         {cameraError && (
-          <div className="mx-6 mt-4 p-3 bg-amber-50 border-l-4 border-amber-500 text-amber-800 text-xs rounded-r flex items-center gap-2">
+          <div
+            className="mx-6 mt-4 p-3 rounded-lg border text-xs flex items-center gap-2"
+            style={{
+              backgroundColor: 'var(--warning-bg)',
+              borderColor: 'var(--warning-border)',
+              color: 'var(--warning-text)',
+            }}
+          >
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{cameraError}</span>
           </div>
@@ -296,7 +334,10 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Product Name *
               </label>
               <input
@@ -305,18 +346,31 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 placeholder="e.g. Kasauti Cotton Kurti"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Category *
               </label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               >
                 <option value="Kurtis">Kurtis</option>
                 <option value="Sarees">Sarees</option>
@@ -329,7 +383,10 @@ export const ProductModal: React.FC<ProductModalProps> = ({
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Price (₹) *
               </label>
               <input
@@ -339,11 +396,19 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 placeholder="1499"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Strike Price (₹)
               </label>
               <input
@@ -352,11 +417,19 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 placeholder="1899"
                 value={oldPrice}
                 onChange={(e) => setOldPrice(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Stock Count *
               </label>
               <input
@@ -366,14 +439,22 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 placeholder="10"
                 value={stock}
                 onChange={(e) => setStock(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Fabric Details / Craft
               </label>
               <input
@@ -381,11 +462,19 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 placeholder="e.g. Hand-block Mulmul Cotton"
                 value={fabric}
                 onChange={(e) => setFabric(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-[#776c6b] uppercase tracking-wider mb-1">
+              <label
+                className="block text-xs font-semibold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Badge / Tag
               </label>
               <input
@@ -393,32 +482,37 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 placeholder="e.g. BESTSELLER, NEW, CURATED"
                 value={tag}
                 onChange={(e) => setTag(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#eadfda] rounded-lg text-sm text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2.5 rounded-lg border text-sm"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
           </div>
 
           {/* MERCHANT CAMERA & IMAGE UPLOAD SECTION */}
-          <div className="border border-dashed border-[#b78a4b]/60 p-4 rounded-xl bg-[#fcf9f5] space-y-3">
+          <div
+            className="border border-dashed p-4 rounded-xl space-y-3"
+            style={{
+              backgroundColor: 'var(--surface-elevated)',
+              borderColor: 'var(--accent)',
+            }}
+          >
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-[#70283b] uppercase tracking-wider flex items-center gap-1.5">
-                <Camera className="w-4 h-4 text-[#b78a4b]" />
+              <span
+                className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5"
+                style={{ color: 'var(--primary)' }}
+              >
+                <Camera className="w-4 h-4" style={{ color: 'var(--accent)' }} />
                 <span>Product Photo & Instant Camera</span>
               </span>
-              <div className="flex items-center gap-1">
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
-                  JPEG
-                </span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
-                  PNG
-                </span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
-                  WebP
-                </span>
-              </div>
+              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                JPEG · PNG · WebP
+              </span>
             </div>
 
-            {/* LIVE WEBCAM VIEWFINDER MODE */}
             {isCameraActive ? (
               <div className="space-y-3 bg-black/90 p-4 rounded-xl text-white">
                 <div className="relative rounded-lg overflow-hidden bg-black aspect-video flex items-center justify-center border border-white/20">
@@ -429,9 +523,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                     muted
                     className="w-full h-full object-cover"
                   />
-                  <div className="absolute top-2 left-2 px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold flex items-center gap-1 animate-pulse">
-                    <span className="w-2 h-2 rounded-full bg-white" />
-                    <span>CAMERA ACTIVE</span>
+                  <div className="absolute top-2 left-2 px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold">
+                    CAMERA ACTIVE
                   </div>
                 </div>
 
@@ -447,7 +540,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                   <button
                     type="button"
                     onClick={handleCapturePhoto}
-                    className="px-5 py-2 bg-[#b78a4b] hover:bg-[#a67a3d] text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 shadow-lg transition-transform hover:scale-105 cursor-pointer"
+                    className="px-5 py-2 text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 shadow-lg cursor-pointer"
+                    style={{ backgroundColor: 'var(--accent)' }}
                   >
                     <Camera className="w-4 h-4" />
                     <span>Snap Photo</span>
@@ -455,10 +549,14 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 </div>
               </div>
             ) : (
-              /* STANDARD UPLOAD & CAMERA CONTROLS */
               <div className="flex flex-col sm:flex-row gap-4 items-center">
-                {/* Photo Preview Box */}
-                <div className="w-24 h-28 rounded-lg border border-[#eadfda] bg-white overflow-hidden shrink-0 flex items-center justify-center shadow-xs">
+                <div
+                  className="w-24 h-28 rounded-lg border overflow-hidden shrink-0 flex items-center justify-center"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
                   {previewUrl || imageUrl ? (
                     <img
                       src={previewUrl || imageUrl}
@@ -466,55 +564,70 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="text-center p-2 text-stone-300">
-                      <ImageIcon className="w-8 h-8 mx-auto mb-1 opacity-50" />
-                      <span className="text-[10px] block text-stone-400">No Image</span>
+                    <div className="text-center p-2" style={{ color: 'var(--text-muted)' }}>
+                      <ImageIcon className="w-7 h-7 mx-auto mb-1 opacity-50" />
+                      <span className="text-[10px] block">No Image</span>
                     </div>
                   )}
                 </div>
 
                 <div className="flex-1 w-full space-y-2">
                   <div className="flex flex-wrap gap-2">
-                    {/* Live Camera Viewfinder Button */}
                     <button
                       type="button"
                       onClick={handleStartCamera}
-                      className="px-3 py-2 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                      className="px-3 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-opacity hover:opacity-95 cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
                     >
                       <Camera className="w-4 h-4" />
                       <span>Use Camera / Webcam</span>
                     </button>
 
-                    {/* File Browser Upload Button */}
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="px-3 py-2 bg-white border border-[#eadfda] hover:bg-[#f8eeeb] text-[#70283b] text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      className="px-3 py-2 border text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
                     >
                       <UploadCloud className="w-4 h-4" />
                       <span>Choose File</span>
                     </button>
 
-                    {/* Native Mobile Camera Button */}
                     <button
                       type="button"
                       onClick={() => mobileCameraInputRef.current?.click()}
-                      className="px-3 py-2 bg-white border border-[#eadfda] hover:bg-[#f8eeeb] text-[#776c6b] hover:text-[#70283b] text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer sm:hidden"
+                      className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer sm:hidden"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-secondary)',
+                      }}
                     >
                       <Video className="w-4 h-4" />
                       <span>Direct Capture</span>
                     </button>
                   </div>
 
-                  <p className="text-[11px] text-[#776c6b] leading-tight">
-                    Strictly accepts <strong className="text-[#292222]">JPEG, PNG, or WebP</strong> up to 5MB. Photo is saved directly to your store catalog.
+                  <p className="text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+                    Accepts <strong style={{ color: 'var(--text-main)' }}>JPEG, PNG, or WebP</strong> up
+                    to 5MB.
                   </p>
 
                   {imageFile && (
-                    <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+                    <div
+                      className="flex items-center gap-1.5 text-xs font-medium"
+                      style={{ color: 'var(--success-text)' }}
+                    >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span className="truncate max-w-[220px]">{imageFile.name}</span>
-                      <span className="text-[10px] text-gray-400">
+                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                         ({Math.round(imageFile.size / 1024)} KB)
                       </span>
                     </div>
@@ -523,9 +636,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
               </div>
             )}
 
-            {/* Or Image URL Input */}
-            <div className="pt-2 border-t border-[#eadfda]/80">
-              <label className="block text-[11px] font-semibold text-[#776c6b] mb-1">
+            <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+              <label
+                className="block text-[11px] font-semibold mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
                 Or paste hosted Image URL:
               </label>
               <input
@@ -536,30 +651,49 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                   setImageUrl(e.target.value);
                   if (!imageFile) setPreviewUrl(e.target.value);
                 }}
-                className="w-full p-2 bg-white border border-[#eadfda] rounded-lg text-xs text-[#292222] focus:outline-[#b78a4b]"
+                className="w-full p-2 rounded-lg border text-xs"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
               />
             </div>
           </div>
 
           {/* Action Buttons */}
-          <div className="flex justify-end gap-3 pt-4 border-t border-[#eadfda]">
+          <div
+            className="flex justify-end gap-3 pt-4 border-t"
+            style={{ borderColor: 'var(--border)' }}
+          >
             <button
               type="button"
               onClick={() => {
                 stopCameraStream();
                 onClose();
               }}
-              className="px-4 py-2 border border-[#eadfda] rounded-lg text-xs font-semibold text-[#776c6b] hover:bg-gray-50 transition-colors cursor-pointer"
+              className="px-4 py-2 border rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-secondary)',
+              }}
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isUploading || isSaving}
-              className="px-6 py-2.5 bg-[#70283b] hover:bg-[#4c1727] text-white text-xs font-semibold tracking-wider uppercase rounded-lg transition-colors flex items-center gap-2 shadow cursor-pointer disabled:opacity-50"
+              className="px-6 py-2.5 text-xs font-semibold tracking-wider uppercase rounded-lg transition-opacity hover:opacity-95 flex items-center gap-2 shadow cursor-pointer disabled:opacity-50"
+              style={{
+                backgroundColor: 'var(--primary)',
+                color: 'var(--btn-text)',
+              }}
             >
               {(isUploading || isSaving) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>{isUploading ? 'Uploading Image...' : isSaving ? 'Saving...' : 'Save Product'}</span>
+              <span>
+                {isUploading ? 'Uploading Image...' : isSaving ? 'Saving...' : 'Save Product'}
+              </span>
             </button>
           </div>
         </form>
