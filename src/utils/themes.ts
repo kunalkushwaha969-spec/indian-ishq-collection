@@ -520,13 +520,102 @@ export function resolveAppearanceMode(
   return systemPrefersDark ? 'dark' : 'light';
 }
 
+const HEADING_FONT_MAP: Record<string, string> = {
+  'Cormorant Garamond': "'Cormorant Garamond', 'Playfair Display', Georgia, serif",
+  'Playfair Display': "'Playfair Display', 'Cormorant Garamond', Georgia, serif",
+  Georgia: "Georgia, 'Times New Roman', serif",
+  'Plus Jakarta Sans': "'Plus Jakarta Sans', 'Noto Sans', system-ui, sans-serif",
+};
+
+const BODY_FONT_MAP: Record<string, string> = {
+  'Plus Jakarta Sans': "'Plus Jakarta Sans', 'Noto Sans', system-ui, -apple-system, sans-serif",
+  'Noto Sans': "'Noto Sans', 'Plus Jakarta Sans', system-ui, sans-serif",
+  'System UI': "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  Georgia: "Georgia, 'Cormorant Garamond', serif",
+};
+
+const RADIUS_CARD_MAP: Record<string, string> = {
+  sharp: '0px',
+  subtle: '6px',
+  rounded: '12px',
+  pill: '20px',
+};
+
+const RADIUS_BTN_MAP: Record<string, string> = {
+  sharp: '0px',
+  subtle: '6px',
+  rounded: '8px',
+  pill: '9999px',
+};
+
 /**
- * Applies the active theme tokens and appearance mode to the root HTML element.
+ * Applies the active theme tokens, appearance mode, and optional merchant customization
+ * overrides (custom colors, fonts, font scales, border radius, button style, and favicon)
+ * to the root HTML element.
  */
-export function applyThemeToDocument(theme: CoordinatedTheme, mode: AppearanceMode): void {
+export function applyThemeToDocument(
+  theme: CoordinatedTheme,
+  mode: AppearanceMode,
+  storeSettings?: {
+    customColorsEnabled?: boolean;
+    customColors?: {
+      primary?: string;
+      accent?: string;
+      bg?: string;
+      surface?: string;
+      textMain?: string;
+      buttonBg?: string;
+      buttonText?: string;
+      border?: string;
+    };
+    headingFont?: string;
+    bodyFont?: string;
+    headingScale?: string;
+    bodyScale?: string;
+    borderRadiusStyle?: string;
+    buttonStyle?: string;
+    faviconUrl?: string;
+  } | null
+): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  const tokens = mode === 'dark' ? theme.dark : theme.light;
+  const baseTokens = mode === 'dark' ? theme.dark : theme.light;
+  const useCustom = Boolean(
+    storeSettings?.customColorsEnabled && storeSettings.customColors && mode === 'light'
+  );
+
+  const primary =
+    useCustom && storeSettings?.customColors?.primary
+      ? storeSettings.customColors.primary
+      : baseTokens.primary;
+  const accent =
+    useCustom && storeSettings?.customColors?.accent
+      ? storeSettings.customColors.accent
+      : baseTokens.accent;
+  const bg =
+    useCustom && storeSettings?.customColors?.bg
+      ? storeSettings.customColors.bg
+      : baseTokens.bg;
+  const surface =
+    useCustom && storeSettings?.customColors?.surface
+      ? storeSettings.customColors.surface
+      : baseTokens.surface;
+  const textMain =
+    useCustom && storeSettings?.customColors?.textMain
+      ? storeSettings.customColors.textMain
+      : baseTokens.textMain;
+  const border =
+    useCustom && storeSettings?.customColors?.border
+      ? storeSettings.customColors.border
+      : baseTokens.border;
+  const btnBg =
+    useCustom && storeSettings?.customColors?.buttonBg
+      ? storeSettings.customColors.buttonBg
+      : primary;
+  const btnText =
+    useCustom && storeSettings?.customColors?.buttonText
+      ? storeSettings.customColors.buttonText
+      : baseTokens.btnText;
 
   root.setAttribute('data-theme', theme.id);
   root.setAttribute('data-mode', mode);
@@ -536,41 +625,77 @@ export function applyThemeToDocument(theme: CoordinatedTheme, mode: AppearanceMo
     root.classList.remove('dark');
   }
 
-  root.style.setProperty('--primary', tokens.primary);
-  root.style.setProperty('--primary-hover', tokens.primaryHover);
-  root.style.setProperty('--secondary', tokens.secondary);
-  root.style.setProperty('--accent', tokens.accent);
-  root.style.setProperty('--bg', tokens.bg);
-  root.style.setProperty('--surface', tokens.surface);
-  root.style.setProperty('--surface-elevated', tokens.surfaceElevated);
-  root.style.setProperty('--header-bg', tokens.headerBg);
-  root.style.setProperty('--footer-bg', tokens.footerBg);
-  root.style.setProperty('--footer-text', tokens.footerText);
-  root.style.setProperty('--text-main', tokens.textMain);
-  root.style.setProperty('--text-secondary', tokens.textSecondary);
-  root.style.setProperty('--text-muted', tokens.textMuted);
-  root.style.setProperty('--border', tokens.border);
-  root.style.setProperty('--input-bg', tokens.inputBg);
-  root.style.setProperty('--btn-text', tokens.btnText);
-  root.style.setProperty('--focus-ring', tokens.focusRing);
-  root.style.setProperty('--success-bg', tokens.successBg);
-  root.style.setProperty('--success-text', tokens.successText);
-  root.style.setProperty('--success-border', tokens.successBorder);
-  root.style.setProperty('--warning-bg', tokens.warningBg);
-  root.style.setProperty('--warning-text', tokens.warningText);
-  root.style.setProperty('--warning-border', tokens.warningBorder);
-  root.style.setProperty('--error-bg', tokens.errorBg);
-  root.style.setProperty('--error-text', tokens.errorText);
-  root.style.setProperty('--error-border', tokens.errorBorder);
-  root.style.setProperty('--overlay', tokens.overlay);
+  root.style.setProperty('--primary', primary);
+  root.style.setProperty('--primary-hover', baseTokens.primaryHover);
+  root.style.setProperty('--secondary', baseTokens.secondary);
+  root.style.setProperty('--accent', accent);
+  root.style.setProperty('--bg', bg);
+  root.style.setProperty('--surface', surface);
+  root.style.setProperty('--surface-elevated', baseTokens.surfaceElevated);
+  root.style.setProperty('--header-bg', useCustom ? surface : baseTokens.headerBg);
+  root.style.setProperty('--footer-bg', baseTokens.footerBg);
+  root.style.setProperty('--footer-text', baseTokens.footerText);
+  root.style.setProperty('--text-main', textMain);
+  root.style.setProperty('--text-secondary', baseTokens.textSecondary);
+  root.style.setProperty('--text-muted', baseTokens.textMuted);
+  root.style.setProperty('--border', border);
+  root.style.setProperty('--input-bg', surface);
+  root.style.setProperty('--btn-bg', btnBg);
+  root.style.setProperty('--btn-text', btnText);
+  root.style.setProperty('--focus-ring', accent);
+  root.style.setProperty('--success-bg', baseTokens.successBg);
+  root.style.setProperty('--success-text', baseTokens.successText);
+  root.style.setProperty('--success-border', baseTokens.successBorder);
+  root.style.setProperty('--warning-bg', baseTokens.warningBg);
+  root.style.setProperty('--warning-text', baseTokens.warningText);
+  root.style.setProperty('--warning-border', baseTokens.warningBorder);
+  root.style.setProperty('--error-bg', baseTokens.errorBg);
+  root.style.setProperty('--error-text', baseTokens.errorText);
+  root.style.setProperty('--error-border', baseTokens.errorBorder);
+  root.style.setProperty('--overlay', baseTokens.overlay);
 
   // Legacy CSS variable aliases for full compatibility
-  root.style.setProperty('--wine', tokens.primary);
-  root.style.setProperty('--wine2', tokens.primaryHover);
-  root.style.setProperty('--rose', tokens.secondary);
-  root.style.setProperty('--cream', tokens.bg);
-  root.style.setProperty('--gold', tokens.accent);
-  root.style.setProperty('--ink', tokens.textMain);
-  root.style.setProperty('--muted', tokens.textMuted);
-  root.style.setProperty('--line', tokens.border);
+  root.style.setProperty('--wine', primary);
+  root.style.setProperty('--wine2', baseTokens.primaryHover);
+  root.style.setProperty('--rose', baseTokens.secondary);
+  root.style.setProperty('--cream', bg);
+  root.style.setProperty('--gold', accent);
+  root.style.setProperty('--ink', textMain);
+  root.style.setProperty('--muted', baseTokens.textMuted);
+  root.style.setProperty('--line', border);
+
+  // Typography & Scale Tokens
+  const headingFontStack =
+    HEADING_FONT_MAP[storeSettings?.headingFont || 'Cormorant Garamond'] ||
+    HEADING_FONT_MAP['Cormorant Garamond'];
+  const bodyFontStack =
+    BODY_FONT_MAP[storeSettings?.bodyFont || 'Plus Jakarta Sans'] ||
+    BODY_FONT_MAP['Plus Jakarta Sans'];
+
+  root.style.setProperty('--font-heading', headingFontStack);
+  root.style.setProperty('--font-body', bodyFontStack);
+
+  const radiusStyle = storeSettings?.borderRadiusStyle || 'rounded';
+  const btnStyle = storeSettings?.buttonStyle || 'solid';
+  root.style.setProperty('--radius-card', RADIUS_CARD_MAP[radiusStyle] || '12px');
+  root.style.setProperty(
+    '--radius-btn',
+    btnStyle === 'pill' ? '9999px' : RADIUS_BTN_MAP[radiusStyle] || '8px'
+  );
+
+  root.setAttribute('data-heading-scale', storeSettings?.headingScale || 'standard');
+  root.setAttribute('data-body-scale', storeSettings?.bodyScale || 'standard');
+  root.setAttribute('data-radius', radiusStyle);
+  root.setAttribute('data-button-style', btnStyle);
+
+  // Dynamic Favicon Update
+  if (storeSettings?.faviconUrl && storeSettings.faviconUrl.trim().length > 0) {
+    let iconLink = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
+    if (!iconLink) {
+      iconLink = document.createElement('link');
+      iconLink.rel = 'icon';
+      document.head.appendChild(iconLink);
+    }
+    iconLink.href = storeSettings.faviconUrl.trim();
+  }
 }

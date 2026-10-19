@@ -17,8 +17,13 @@
     --text-muted: #786a69;
     --border: #e6dad4;
     --input-bg: #ffffff;
+    --btn-bg: var(--primary);
     --btn-text: #ffffff;
     --focus-ring: #b78a4b;
+    --font-heading: 'Cormorant Garamond', 'Playfair Display', Georgia, serif;
+    --font-body: 'Plus Jakarta Sans', 'Noto Sans', system-ui, -apple-system, sans-serif;
+    --radius-card: 12px;
+    --radius-btn: 8px;
     --success-bg: #ecfdf5;
     --success-text: #065f46;
     --success-border: #a7f3d0;
@@ -57,6 +62,7 @@
     --text-muted: #9e8c90;
     --border: #332429;
     --input-bg: #161013;
+    --btn-bg: #d86c86;
     --btn-text: #140b0e;
     --focus-ring: #d8ab69;
     --success-bg: rgba(6, 95, 70, 0.25);
@@ -73,14 +79,34 @@
 
   html {
     scroll-behavior: smooth;
-    font-family: 'Plus Jakarta Sans', 'Noto Sans', system-ui, -apple-system, sans-serif;
+    font-family: var(--font-body);
     background-color: var(--bg);
     color: var(--text-main);
     transition: background-color 200ms ease, color 200ms ease;
   }
 
+  body {
+    font-family: var(--font-body);
+  }
+
   h1, h2, h3, h4, .font-serif {
-    font-family: 'Cormorant Garamond', 'Playfair Display', Georgia, serif;
+    font-family: var(--font-heading);
+  }
+
+  /* Merchant Typography Scale Adjustments */
+  :root[data-body-scale="compact"] body {
+    font-size: 0.94rem;
+  }
+  :root[data-body-scale="large"] body {
+    font-size: 1.05rem;
+  }
+
+  :root[data-heading-scale="compact"] h1,
+  :root[data-heading-scale="compact"] h2 {
+    letter-spacing: -0.015em;
+  }
+  :root[data-heading-scale="large"] h1 {
+    font-size: clamp(2rem, 4.2vw, 3.5rem);
   }
 
   /* Optical compensation for dark mode typography */
@@ -89,17 +115,43 @@
   }
 }
 
-/* Mobile & Layout Responsiveness */
-html, body {
-  overflow-x: hidden;
+/* Strict Mobile & Desktop Horizontal Overflow Prevention */
+html,
+body,
+#root {
+  max-width: 100%;
   width: 100%;
   min-height: 100vh;
+  overflow-x: hidden;
+  overflow-x: clip;
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+  height: auto;
 }
 
 img {
-  max-width: 100%;
-  height: auto;
   object-fit: cover;
+}
+
+/* Hide scrollbars on horizontal filter/tab bars while keeping touch scrolling */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 /* Focus Ring Accessibility */

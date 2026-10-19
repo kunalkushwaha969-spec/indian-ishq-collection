@@ -1,26 +1,48 @@
-import React, { useState, useEffect, useRef } from 'react';
-import type { Product, StoreSettings } from '../utils/ecommerce';
-import { DEFAULT_STORE_SETTINGS, isRazorpayConfigured } from '../utils/ecommerce';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import type { Product } from '../utils/ecommerce';
+import {
+  filterProducts,
+  formatINR,
+  type StoreSettings,
+  type HeroSlide,
+  type HomepageSectionConfig,
+  DEFAULT_STORE_SETTINGS,
+  getActiveHeroSlides,
+  sanitizeHomepageSections,
+  DEFAULT_PROMO_BANNER,
+  DEFAULT_TESTIMONIALS,
+} from '../utils/ecommerce';
 import type { CoordinatedTheme, AppearanceMode } from '../utils/themes';
 import { ProductCard } from './ProductCard';
 import {
-  Search,
   ShoppingBag,
-  Shield,
-  RefreshCw,
-  Loader2,
+  Search,
+  Sparkles,
+  Truck,
+  RefreshCcw,
+  ShieldCheck,
+  Award,
+  SlidersHorizontal,
+  HeartHandshake,
+  MessageCircle,
+  CheckCircle2,
+  X,
+  ArrowUpDown,
+  Lock,
+  Palette,
   Sun,
   Moon,
-  Palette,
-  X,
-  ArrowUpRight,
-  Check,
-  Phone,
   MapPin,
-  MessageCircle,
-  Truck,
-  RotateCcw,
+  Phone,
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  Star,
+  Quote,
+  Mail,
 } from 'lucide-react';
+
+type SortOption = 'featured' | 'price-asc' | 'price-desc';
 
 interface StorefrontProps {
   products: Product[];
@@ -29,17 +51,17 @@ interface StorefrontProps {
   activeCategory: string;
   searchQuery: string;
   cartCount: number;
-  coverPhoto?: string;
+  coverPhoto: string;
   activeTheme: CoordinatedTheme;
   themes: CoordinatedTheme[];
   appearanceMode: AppearanceMode;
   storeSettings?: StoreSettings;
-  isMerchantAuthenticated?: boolean;
-  onCategoryChange: (category: string) => void;
-  onSearchChange: (query: string) => void;
+  isMerchantAuthenticated: boolean;
+  onCategoryChange: (cat: string) => void;
+  onSearchChange: (q: string) => void;
   onAddToCart: (product: Product) => void;
   onWishlistClick: (product: Product) => void;
-  onSelectProduct?: (product: Product) => void;
+  onSelectProduct: (product: Product) => void;
   onOpenCart: () => void;
   onOpenMerchant: () => void;
   onRetryFetch: () => void;
@@ -48,8 +70,65 @@ interface StorefrontProps {
   onOpenThemeModal: () => void;
 }
 
-const DEFAULT_HERO_IMAGE =
-  'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=1200&q=80';
+const CATEGORIES = ['All', 'Kurtis', 'Sarees', 'Suits', 'Festive'];
+
+const FEATURED_CATEGORY_CARDS = [
+  {
+    id: 'Sarees',
+    title: 'Royal Silk Sarees',
+    subtitle: 'Banarasi Katan, Zari & Hand-Block Drapes',
+    image:
+      'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=700&q=85',
+  },
+  {
+    id: 'Festive',
+    title: 'Bridal & Festive Wear',
+    subtitle: 'Hand-embroidered Zardozi & Gota Patti',
+    image:
+      'https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&w=700&q=85',
+  },
+  {
+    id: 'Kurtis',
+    title: 'Everyday Mulmul Kurtis',
+    subtitle: 'Breathable cottons & artisanal yoke craft',
+    image:
+      'https://images.unsplash.com/photo-1617627143750-d86bc21e42bb?auto=format&fit=crop&w=700&q=85',
+  },
+  {
+    id: 'Suits',
+    title: 'Chanderi & Organza Suits',
+    subtitle: 'Three-piece festive & daily suit sets',
+    image:
+      'https://images.unsplash.com/photo-1609357605129-26f69add5d6e?auto=format&fit=crop&w=700&q=85',
+  },
+];
+
+const CURATED_CRAFT_COLLECTIONS = [
+  {
+    id: 'Sarees',
+    badge: 'Varanasi Looms',
+    title: 'The Banarasi Zari Edit',
+    desc: 'Lustrous Katan silk drapes woven with pure zari borders and heritage motifs.',
+    image:
+      'https://images.unsplash.com/photo-1617627143750-d86bc21e42bb?auto=format&fit=crop&w=900&q=80',
+  },
+  {
+    id: 'Kurtis',
+    badge: 'Jaipur Block Print',
+    title: 'Breathable Mulmul & Cottons',
+    desc: 'Featherlight daily silhouettes crafted for effortless comfort in Indian summers.',
+    image:
+      'https://images.unsplash.com/photo-1583391733975-04535df2b378?auto=format&fit=crop&w=900&q=80',
+  },
+  {
+    id: 'Festive',
+    badge: 'Occasion Couture',
+    title: 'Sangeet & Festive Ensembles',
+    desc: 'Rich velvet lehengas and Chanderi silk anarkalis finished with hand gota patti.',
+    image:
+      'https://images.unsplash.com/photo-1610030469668-932d0c242e88?auto=format&fit=crop&w=900&q=80',
+  },
+];
 
 export const Storefront: React.FC<StorefrontProps> = ({
   products,
@@ -63,7 +142,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
   themes,
   appearanceMode,
   storeSettings = DEFAULT_STORE_SETTINGS,
-  isMerchantAuthenticated = false,
+  isMerchantAuthenticated,
   onCategoryChange,
   onSearchChange,
   onAddToCart,
@@ -76,1097 +155,1656 @@ export const Storefront: React.FC<StorefrontProps> = ({
   onToggleAppearance,
   onOpenThemeModal,
 }) => {
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [heroImgError, setHeroImgError] = useState(false);
-  const [logoImgError, setLogoImgError] = useState(false);
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const brandName = storeSettings.storeName || DEFAULT_STORE_SETTINGS.storeName;
+  const brandTagline = storeSettings.tagline || DEFAULT_STORE_SETTINGS.tagline;
+  const brandDescription =
+    storeSettings.brandDescription || DEFAULT_STORE_SETTINGS.brandDescription;
+  const announcementText =
+    storeSettings.announcementText ?? DEFAULT_STORE_SETTINGS.announcementText;
+  const whatsappClean = (storeSettings.whatsapp || DEFAULT_STORE_SETTINGS.whatsapp).replace(
+    /\D/g,
+    ''
+  );
+  const storeAddress = storeSettings.address || '';
+  const storePhone = storeSettings.phone || '';
+  const mapsUrl =
+    storeSettings.mapsUrl ||
+    (storeAddress
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          `${brandName} ${storeAddress}`
+        )}`
+      : '');
 
-  const categories = [
-    { id: 'All', label: 'All Pieces' },
-    { id: 'Kurtis', label: 'Kurtis' },
-    { id: 'Sarees', label: 'Sarees' },
-    { id: 'Suits', label: 'Suit Sets' },
-    { id: 'Festive', label: 'Festive Wear' },
-  ];
+  // Header customization flags
+  const showAnnouncementBar =
+    storeSettings.announcementEnabled !== false && Boolean(announcementText?.trim());
+  const headerShowThemeControls = storeSettings.showThemeSelectorInHeader !== false;
 
-  // Reset hero error if coverPhoto changes
+  // Resolve active hero slides from merchant settings (with legacy coverPhoto support)
+  const activeHeroSlides: HeroSlide[] = useMemo(() => {
+    return getActiveHeroSlides(storeSettings, coverPhoto);
+  }, [storeSettings, coverPhoto]);
+
+  const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
+  const [isHeroHovered, setIsHeroHovered] = useState<boolean>(false);
+  const touchStartXRef = useRef<number | null>(null);
+
   useEffect(() => {
-    setHeroImgError(false);
-  }, [coverPhoto]);
+    if (currentSlideIndex >= activeHeroSlides.length) {
+      setCurrentSlideIndex(0);
+    }
+  }, [activeHeroSlides.length, currentSlideIndex]);
 
-  useEffect(() => {
-    setLogoImgError(false);
-  }, [storeSettings.logoUrl]);
+  const handleNextSlide = useCallback(() => {
+    if (activeHeroSlides.length <= 1) return;
+    setCurrentSlideIndex((prev) => (prev + 1) % activeHeroSlides.length);
+  }, [activeHeroSlides.length]);
 
-  // Lock body scroll and listen for Escape when Hamburger Drawer is open
-  useEffect(() => {
-    if (!isDrawerOpen) return;
-
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsDrawerOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isDrawerOpen]);
-
-  // IntersectionObserver for gentle section reveals
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('IntersectionObserver' in window)) return;
-    const prefersReduced =
-      window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReduced) return;
-
-    const elements = document.querySelectorAll('.reveal-section');
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('reveal-visible');
-            entry.target.classList.remove('reveal-pending');
-            observer.unobserve(entry.target);
-          }
-        });
-      },
-      { threshold: 0.08, rootMargin: '0px 0px -20px 0px' }
+  const handlePrevSlide = useCallback(() => {
+    if (activeHeroSlides.length <= 1) return;
+    setCurrentSlideIndex(
+      (prev) => (prev - 1 + activeHeroSlides.length) % activeHeroSlides.length
     );
+  }, [activeHeroSlides.length]);
 
-    elements.forEach((el) => {
-      const rect = el.getBoundingClientRect();
-      if (rect.top > window.innerHeight) {
-        el.classList.add('reveal-pending');
+  // Automatic slide advancement with pause on hover
+  useEffect(() => {
+    if (
+      activeHeroSlides.length <= 1 ||
+      storeSettings.heroAutoplay === false ||
+      isHeroHovered
+    ) {
+      return;
+    }
+    const intervalMs = Math.max(
+      2500,
+      Number(storeSettings.heroIntervalMs) || DEFAULT_STORE_SETTINGS.heroIntervalMs
+    );
+    const timer = window.setInterval(() => {
+      setCurrentSlideIndex((prev) => (prev + 1) % activeHeroSlides.length);
+    }, intervalMs);
+
+    return () => window.clearInterval(timer);
+  }, [
+    activeHeroSlides.length,
+    storeSettings.heroAutoplay,
+    storeSettings.heroIntervalMs,
+    isHeroHovered,
+  ]);
+
+  const currentHeroSlide = activeHeroSlides[currentSlideIndex] || activeHeroSlides[0];
+  const slideOverlayOpacity = Math.min(
+    90,
+    Math.max(25, Number(currentHeroSlide?.overlayOpacity ?? 75))
+  );
+
+  // Filter & Sort State
+  const [sortBy, setSortBy] = useState<SortOption>('featured');
+  const [inStockOnly, setInStockOnly] = useState<boolean>(false);
+  const [maxPriceFilter, setMaxPriceFilter] = useState<number>(25000);
+  const [showFiltersPanel, setShowFiltersPanel] = useState<boolean>(false);
+
+  // Newsletter state
+  const [newsletterEmail, setNewsletterEmail] = useState<string>('');
+  const [newsletterSubmitted, setNewsletterSubmitted] = useState<boolean>(false);
+
+  const handleNewsletterSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newsletterEmail.trim() || !newsletterEmail.includes('@')) return;
+    try {
+      const existing = JSON.parse(localStorage.getItem('ishq_newsletter_subscribers') || '[]');
+      if (Array.isArray(existing) && !existing.includes(newsletterEmail.trim())) {
+        existing.push(newsletterEmail.trim());
+        localStorage.setItem('ishq_newsletter_subscribers', JSON.stringify(existing));
       }
-      observer.observe(el);
-    });
+    } catch {}
+    setNewsletterSubmitted(true);
+    setNewsletterEmail('');
+  };
 
-    return () => observer.disconnect();
-  }, []);
+  // Compute maximum product price dynamically
+  const highestCatalogPrice = useMemo(() => {
+    if (products.length === 0) return 25000;
+    return Math.max(...products.map((p) => p.price), 10000);
+  }, [products]);
 
-  const handleDrawerCategoryClick = (categoryId: string) => {
-    onCategoryChange(categoryId);
-    setIsDrawerOpen(false);
-    const shopEl = document.getElementById('shop');
-    if (shopEl) {
-      shopEl.scrollIntoView({ behavior: 'smooth' });
+  // Featured New Arrivals
+  const newArrivalProducts = useMemo(() => {
+    const tagged = products.filter(
+      (p) =>
+        p.stock > 0 &&
+        (p.tag?.toLowerCase().includes('new') ||
+          p.tag?.toLowerCase().includes('just in') ||
+          p.tag?.toLowerCase().includes('festive'))
+    );
+    const list = tagged.length >= 4 ? tagged : [...products].reverse();
+    return list.slice(0, 4);
+  }, [products]);
+
+  // Filter and sort products
+  const filteredProducts = useMemo(() => {
+    let base = filterProducts(products, activeCategory, searchQuery);
+    if (inStockOnly) {
+      base = base.filter((p) => p.stock > 0);
+    }
+    if (maxPriceFilter < highestCatalogPrice) {
+      base = base.filter((p) => p.price <= maxPriceFilter);
+    }
+    if (sortBy === 'price-asc') {
+      base = [...base].sort((a, b) => a.price - b.price);
+    } else if (sortBy === 'price-desc') {
+      base = [...base].sort((a, b) => b.price - a.price);
+    }
+    return base;
+  }, [products, activeCategory, searchQuery, sortBy, inStockOnly, maxPriceFilter, highestCatalogPrice]);
+
+  const activeFilterCount =
+    (activeCategory !== 'All' ? 1 : 0) +
+    (searchQuery.trim() !== '' ? 1 : 0) +
+    (inStockOnly ? 1 : 0) +
+    (maxPriceFilter < highestCatalogPrice ? 1 : 0);
+
+  const resetAllFilters = () => {
+    onCategoryChange('All');
+    onSearchChange('');
+    setSortBy('featured');
+    setInStockOnly(false);
+    setMaxPriceFilter(highestCatalogPrice);
+  };
+
+  const scrollToCatalog = () => {
+    const el = document.getElementById('catalog') || document.getElementById('shop');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
-  const heroImageSrc = coverPhoto && coverPhoto.trim() !== '' ? coverPhoto : DEFAULT_HERO_IMAGE;
-  const cleanPhoneHref = (storeSettings.phone || '+919876543210').replace(/[^\d+]/g, '');
-  const cleanWhatsapp = (storeSettings.whatsapp || '919876543210').replace(/\D/g, '');
-  const activePaymentLabels = [
-    storeSettings.upiEnabled ? 'Instant UPI QR' : null,
-    storeSettings.codEnabled ? 'Doorstep COD' : null,
-    isRazorpayConfigured(storeSettings.razorpayKeyId, storeSettings.razorpayEnabled)
-      ? 'Razorpay Online'
-      : null,
-  ].filter(Boolean);
+  const handleSlideCtaClick = (slide: HeroSlide) => {
+    if (slide.categoryFilter && CATEGORIES.includes(slide.categoryFilter)) {
+      onCategoryChange(slide.categoryFilter);
+    }
+    const targetLink = slide.ctaLink || '#catalog';
+    if (targetLink.startsWith('#')) {
+      const targetId = targetLink.slice(1);
+      const el =
+        document.getElementById(targetId) ||
+        document.getElementById('catalog') ||
+        document.getElementById('shop');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth' });
+      }
+    } else if (targetLink.startsWith('http://') || targetLink.startsWith('https://')) {
+      window.location.href = targetLink;
+    }
+  };
 
-  return (
-    <div
-      className="min-h-screen font-sans transition-colors duration-200"
-      style={{ backgroundColor: 'var(--bg)', color: 'var(--text-main)' }}
-    >
-      {/* Slim Top Announcement Bar */}
-      {storeSettings.announcementText && (
-        <div
-          className="text-center py-2 px-4 text-[11px] sm:text-xs tracking-wider font-medium border-b transition-colors"
-          style={{
-            backgroundColor: 'var(--primary)',
-            color: 'var(--btn-text)',
-            borderColor: 'var(--border)',
-          }}
-        >
-          {storeSettings.announcementText}
-        </div>
-      )}
+  // Ordered homepage sections from merchant settings
+  const orderedHomepageSections: HomepageSectionConfig[] = useMemo(
+    () => sanitizeHomepageSections(storeSettings.homepageSections),
+    [storeSettings.homepageSections]
+  );
 
-      {/* Sticky Top Header */}
-      <header
-        className="sticky top-0 z-40 h-16 sm:h-[72px] backdrop-blur-md border-b px-4 sm:px-8 lg:px-12 transition-colors"
-        style={{
-          backgroundColor: 'var(--header-bg)',
-          borderColor: 'var(--border)',
-        }}
-      >
-        <div className="max-w-7xl mx-auto h-full flex items-center justify-between gap-2 sm:gap-4">
-          {/* Left Zone: Hamburger Three-Line Button + Logo & Brand Wordmark */}
-          <div className="flex items-center gap-2 sm:gap-3.5 min-w-0">
-            <button
-              type="button"
-              onClick={() => setIsDrawerOpen((prev) => !prev)}
-              aria-label={isDrawerOpen ? 'Close navigation menu' : 'Open navigation menu'}
-              aria-expanded={isDrawerOpen}
-              aria-controls="mobile-navigation-drawer"
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-main)',
-              }}
-            >
-              <span
-                className={`block w-4.5 h-0.5 rounded-full transition-transform duration-200 ${
-                  isDrawerOpen ? 'translate-y-2 rotate-45' : ''
-                }`}
-                style={{ backgroundColor: 'var(--text-main)' }}
-              />
-              <span
-                className={`block w-4.5 h-0.5 rounded-full transition-opacity duration-200 ${
-                  isDrawerOpen ? 'opacity-0' : 'opacity-100'
-                }`}
-                style={{ backgroundColor: 'var(--text-main)' }}
-              />
-              <span
-                className={`block w-4.5 h-0.5 rounded-full transition-transform duration-200 ${
-                  isDrawerOpen ? '-translate-y-2 -rotate-45' : ''
-                }`}
-                style={{ backgroundColor: 'var(--text-main)' }}
-              />
-            </button>
+  // Desktop grid column class based on merchant preference (3 or 4 columns)
+  const desktopGridColsClass =
+    storeSettings.gridColumnsDesktop === 3
+      ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+      : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4';
 
-            <a
-              href="#home"
-              className="flex items-center gap-2 font-serif text-[16px] sm:text-2xl font-bold tracking-tight truncate"
-              style={{ color: 'var(--primary)' }}
-            >
-              {storeSettings.logoUrl && !logoImgError && (
-                <img
-                  src={storeSettings.logoUrl}
-                  alt={`${storeSettings.storeName} logo`}
-                  referrerPolicy="no-referrer"
-                  onError={() => setLogoImgError(true)}
-                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg object-cover border shrink-0"
-                  style={{ borderColor: 'var(--border)' }}
-                />
-              )}
-              <span className="truncate">{storeSettings.storeName}</span>
-            </a>
-          </div>
+  const promoBanner = storeSettings.promoBanner || DEFAULT_PROMO_BANNER;
+  const testimonials =
+    Array.isArray(storeSettings.testimonials) && storeSettings.testimonials.length > 0
+      ? storeSettings.testimonials
+      : DEFAULT_TESTIMONIALS;
 
-          {/* Center Zone: Clean Single-Line Desktop Navigation */}
-          <nav
-            aria-label="Primary navigation"
-            className="hidden lg:flex items-center gap-7 text-xs font-semibold uppercase tracking-wider"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            <a
-              href="#home"
-              className="hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Home
-            </a>
-            <a
-              href="#shop"
-              onClick={() => onCategoryChange('All')}
-              className="hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Collection
-            </a>
-            <a
-              href="#shop"
-              onClick={() => onCategoryChange('Sarees')}
-              className="hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Sarees
-            </a>
-            <a
-              href="#shop"
-              onClick={() => onCategoryChange('Kurtis')}
-              className="hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Kurtis
-            </a>
-            <a
-              href="#story"
-              className="hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Our Story
-            </a>
-          </nav>
+  // Render function for each configurable homepage section
+  const renderHomepageSection = (section: HomepageSectionConfig) => {
+    if (!section.enabled) return null;
 
-          {/* Right Zone: Appearance Switch, Theme Selector, Merchant & Shopping Bag */}
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-            {/* Separate Dark/Light Appearance Toggle */}
-            <button
-              type="button"
-              onClick={onToggleAppearance}
-              aria-label={
-                appearanceMode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'
+    switch (section.id) {
+      case 'hero':
+        return (
+          <section
+            key="hero"
+            id="top"
+            aria-label="Featured Collection Slideshow"
+            className="relative w-full overflow-hidden select-none"
+            onMouseEnter={() => setIsHeroHovered(true)}
+            onMouseLeave={() => setIsHeroHovered(false)}
+            onTouchStart={(e) => {
+              touchStartXRef.current = e.touches[0]?.clientX ?? null;
+            }}
+            onTouchEnd={(e) => {
+              if (touchStartXRef.current === null) return;
+              const endX = e.changedTouches[0]?.clientX ?? touchStartXRef.current;
+              const deltaX = endX - touchStartXRef.current;
+              if (Math.abs(deltaX) > 40) {
+                if (deltaX < 0) handleNextSlide();
+                else handlePrevSlide();
               }
-              title={appearanceMode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg border flex items-center justify-center transition-colors cursor-pointer shrink-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-main)',
-              }}
-            >
-              {appearanceMode === 'dark' ? (
-                <Sun className="w-4 h-4" style={{ color: 'var(--accent)' }} />
-              ) : (
-                <Moon className="w-4 h-4" style={{ color: 'var(--primary)' }} />
-              )}
-            </button>
-
-            {/* Theme Palette Selector Trigger */}
-            <button
-              type="button"
-              onClick={onOpenThemeModal}
-              aria-label="Open colour theme selector"
-              title="Change Colour Theme"
-              className="h-9 sm:h-10 px-2.5 sm:px-3 rounded-lg border flex items-center gap-2 text-xs font-semibold transition-colors cursor-pointer shrink-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-main)',
-              }}
-            >
-              <Palette className="w-4 h-4" style={{ color: 'var(--primary)' }} />
-              <span className="hidden xl:inline whitespace-nowrap">{activeTheme.name}</span>
-            </button>
-
-            {/* Merchant Workspace Button (Desktop) */}
-            <button
-              type="button"
-              onClick={onOpenMerchant}
-              className="hidden sm:flex h-10 px-3 rounded-lg border items-center gap-1.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-secondary)',
-              }}
-              title="Merchant Login"
-            >
-              <Shield className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
-              <span>{isMerchantAuthenticated ? 'Workspace' : 'Merchant'}</span>
-            </button>
-
-            {/* Shopping Bag Primary Action */}
-            <button
-              type="button"
-              onClick={onOpenCart}
-              aria-label={`View shopping bag, ${cartCount} items`}
-              className="h-9 sm:h-10 px-2.5 sm:px-4 rounded-lg text-xs font-semibold tracking-wider uppercase flex items-center gap-1.5 sm:gap-2 transition-opacity hover:opacity-95 shadow-xs cursor-pointer whitespace-nowrap shrink-0"
-              style={{
-                backgroundColor: 'var(--primary)',
-                color: 'var(--btn-text)',
-              }}
-            >
-              <ShoppingBag className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Bag</span>
-              <span
-                className="px-1.5 py-0.5 rounded text-[11px] font-bold tabular-nums"
-                style={{
-                  backgroundColor: 'var(--surface)',
-                  color: 'var(--text-main)',
-                }}
-              >
-                {cartCount}
-              </span>
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Slide-In Left Hamburger Navigation Drawer */}
-      {isDrawerOpen && (
-        <div
-          className="fixed inset-0 z-50 flex"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Site navigation drawer"
-        >
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 transition-opacity duration-200"
-            style={{ backgroundColor: 'var(--overlay)' }}
-            onClick={() => setIsDrawerOpen(false)}
-          />
-
-          {/* Drawer Panel */}
-          <aside
-            id="mobile-navigation-drawer"
-            ref={drawerRef}
-            className="relative z-10 w-[86vw] max-w-sm h-full overflow-y-auto border-r shadow-2xl flex flex-col justify-between p-6 transition-transform duration-200"
-            style={{
-              backgroundColor: 'var(--surface)',
-              borderColor: 'var(--border)',
-              color: 'var(--text-main)',
+              touchStartXRef.current = null;
             }}
           >
-            <div className="space-y-6">
-              {/* Drawer Header */}
-              <div
-                className="flex items-center justify-between pb-4 border-b"
-                style={{ borderColor: 'var(--border)' }}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  {storeSettings.logoUrl && !logoImgError && (
-                    <img
-                      src={storeSettings.logoUrl}
-                      alt={`${storeSettings.storeName} logo`}
-                      referrerPolicy="no-referrer"
-                      className="w-9 h-9 rounded-lg object-cover border shrink-0"
-                      style={{ borderColor: 'var(--border)' }}
+            <div className="relative w-full h-[68vh] min-h-[400px] max-h-[640px] sm:h-[74vh] lg:h-[80vh] lg:max-h-[760px] bg-[#160c10]">
+              {activeHeroSlides.map((slide, index) => {
+                const isCurrent = index === currentSlideIndex;
+                return (
+                  <div
+                    key={slide.id}
+                    aria-hidden={!isCurrent}
+                    className={`absolute inset-0 transition-opacity duration-700 ease-out ${
+                      isCurrent ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+                    }`}
+                  >
+                    <picture>
+                      {slide.mobileImageUrl && (
+                        <source media="(max-width: 767px)" srcSet={slide.mobileImageUrl} />
+                      )}
+                      <img
+                        src={slide.imageUrl}
+                        alt={slide.title || brandName}
+                        loading={index === 0 ? 'eager' : 'lazy'}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover object-top sm:object-center"
+                      />
+                    </picture>
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background: `linear-gradient(to top, rgba(16, 8, 11, ${(
+                          slideOverlayOpacity / 100
+                        ).toFixed(2)}) 0%, rgba(16, 8, 11, ${(
+                          (slideOverlayOpacity * 0.55) /
+                          100
+                        ).toFixed(2)}) 48%, rgba(16, 8, 11, 0.14) 100%)`,
+                      }}
                     />
-                  )}
-                  <div className="min-w-0">
-                    <span
-                      className="font-serif text-xl font-bold block truncate"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      {storeSettings.storeName}
-                    </span>
-                    <span className="text-[11px] block truncate" style={{ color: 'var(--text-muted)' }}>
-                      {storeSettings.tagline}
-                    </span>
+                  </div>
+                );
+              })}
+
+              {/* Hero Overlay Content */}
+              {currentHeroSlide && (
+                <div className="relative z-20 h-full max-w-[1280px] mx-auto px-3 sm:px-6 pb-10 sm:pb-14 pt-6 flex flex-col justify-end min-w-0">
+                  <div className="max-w-2xl space-y-2.5 sm:space-y-3.5 min-w-0">
+                    {currentHeroSlide.badge && (
+                      <div
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] sm:text-xs font-bold tracking-[0.18em] uppercase shadow-sm max-w-full"
+                        style={{
+                          backgroundColor: 'var(--accent)',
+                          color: '#1b1114',
+                        }}
+                      >
+                        <Sparkles className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{currentHeroSlide.badge}</span>
+                      </div>
+                    )}
+
+                    <h1 className="font-serif text-3xl sm:text-5xl lg:text-6xl font-bold text-white leading-[1.08] tracking-tight drop-shadow-sm break-words">
+                      {currentHeroSlide.title}
+                    </h1>
+
+                    {currentHeroSlide.subtitle && (
+                      <p className="text-xs sm:text-base text-white/90 max-w-xl leading-relaxed line-clamp-2 sm:line-clamp-3 drop-shadow-xs break-words">
+                        {currentHeroSlide.subtitle}
+                      </p>
+                    )}
+
+                    <div className="pt-1.5 flex flex-wrap items-center gap-2.5 sm:gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleSlideCtaClick(currentHeroSlide)}
+                        className="px-5 sm:px-7 py-2.5 sm:py-3.5 rounded-lg text-xs font-bold uppercase tracking-widest shadow-lg transition hover:opacity-95 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        {currentHeroSlide.ctaText || 'Explore Collection'}
+                      </button>
+
+                      {whatsappClean && storeSettings.whatsappOrderEnabled !== false && (
+                        <a
+                          href={`https://wa.me/${whatsappClean}?text=${encodeURIComponent(
+                            `Namaste ${brandName}! I would like to explore your ${currentHeroSlide.title}.`
+                          )}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-4 sm:px-5 py-2.5 sm:py-3.5 rounded-lg text-xs font-semibold uppercase tracking-wider bg-black/45 hover:bg-black/65 text-white border border-white/25 backdrop-blur-xs transition flex items-center gap-1.5"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>WhatsApp Stylist</span>
+                        </a>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsDrawerOpen(false)}
-                  aria-label="Close navigation menu"
-                  className="w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer shrink-0"
-                  style={{
-                    backgroundColor: 'var(--surface-elevated)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+              )}
 
-              {/* Drawer Search Input */}
-              <div>
-                <label htmlFor="drawer-search-input" className="sr-only">
-                  Search products
-                </label>
-                <div className="relative">
-                  <Search
-                    className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2"
-                    style={{ color: 'var(--text-muted)' }}
-                  />
-                  <input
-                    id="drawer-search-input"
-                    type="text"
-                    placeholder="Search kurtis, sarees, suits..."
-                    value={searchQuery}
-                    onChange={(e) => onSearchChange(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        setIsDrawerOpen(false);
-                        document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' });
-                      }
-                    }}
-                    className="w-full pl-9 pr-4 py-2.5 rounded-lg border text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Primary Navigation Links */}
-              <div className="space-y-1">
-                <span
-                  className="text-[11px] font-semibold uppercase tracking-widest block mb-2"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Navigation
-                </span>
-                {[
-                  { label: 'Home', href: '#home' },
-                  { label: 'Shop All Products', href: '#shop' },
-                  { label: 'Our Craft & Story', href: '#story' },
-                  { label: 'Contact & Boutique Info', href: '#footer-contact' },
-                ].map((navItem) => (
-                  <a
-                    key={navItem.label}
-                    href={navItem.href}
-                    onClick={() => setIsDrawerOpen(false)}
-                    className="block py-2 px-3 rounded-lg text-sm font-medium transition-colors"
-                    style={{ color: 'var(--text-main)' }}
+              {/* Previous / Next Controls & Slide Dots (only shown when > 1 active slide) */}
+              {activeHeroSlides.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handlePrevSlide}
+                    aria-label="Previous hero slide"
+                    className="hidden sm:flex absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white border border-white/20 items-center justify-center backdrop-blur-xs transition cursor-pointer"
                   >
-                    {navItem.label}
-                  </a>
-                ))}
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNextSlide}
+                    aria-label="Next hero slide"
+                    className="hidden sm:flex absolute right-3 sm:right-5 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white border border-white/20 items-center justify-center backdrop-blur-xs transition cursor-pointer"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsDrawerOpen(false);
-                    onOpenCart();
-                  }}
-                  className="w-full text-left py-2 px-3 rounded-lg text-sm font-medium flex items-center justify-between cursor-pointer"
+                  {/* Bottom Slide Indicators */}
+                  <div
+                    role="tablist"
+                    aria-label="Slideshow navigation"
+                    className="absolute bottom-3.5 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-6 z-20 flex items-center gap-2 bg-black/35 px-3 py-1.5 rounded-full backdrop-blur-xs border border-white/15 max-w-[90%]"
+                  >
+                    {activeHeroSlides.map((slide, idx) => {
+                      const active = idx === currentSlideIndex;
+                      return (
+                        <button
+                          key={slide.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          aria-label={`Show slide ${idx + 1}: ${slide.title}`}
+                          onClick={() => setCurrentSlideIndex(idx)}
+                          className={`h-2 rounded-full transition-all cursor-pointer ${
+                            active ? 'w-6 bg-white' : 'w-2 bg-white/50 hover:bg-white/80'
+                          }`}
+                        />
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+        );
+
+      case 'categories':
+        return (
+          <section
+            key="categories"
+            aria-label="Featured Categories"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-6 sm:pt-8 min-w-0"
+          >
+            <div className="flex flex-wrap items-end justify-between gap-2 mb-4">
+              <div className="min-w-0">
+                <span
+                  className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  Curated Silks & Craft
+                </span>
+                <h2
+                  className="font-serif text-2xl sm:text-3xl font-bold break-words"
                   style={{ color: 'var(--text-main)' }}
                 >
-                  <span>Shopping Bag</span>
-                  <span
-                    className="px-2 py-0.5 rounded text-xs font-bold tabular-nums"
-                    style={{
-                      backgroundColor: 'var(--secondary)',
-                      color: 'var(--primary)',
-                    }}
-                  >
-                    {cartCount} items
-                  </span>
-                </button>
-              </div>
-
-              {/* Product Categories */}
-              <div className="pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                <span
-                  className="text-[11px] font-semibold uppercase tracking-widest block mb-2.5"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Product Categories
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  {categories.map((cat) => {
-                    const active = activeCategory === cat.id;
-                    return (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => handleDrawerCategoryClick(cat.id)}
-                        className="px-3 py-2 rounded-lg border text-xs font-semibold text-left transition-colors cursor-pointer"
-                        style={{
-                          backgroundColor: active ? 'var(--primary)' : 'var(--surface-elevated)',
-                          color: active ? 'var(--btn-text)' : 'var(--text-main)',
-                          borderColor: active ? 'var(--primary)' : 'var(--border)',
-                        }}
-                      >
-                        {cat.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Separate Appearance Mode Control inside Drawer */}
-              <div className="pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                <div className="flex items-center justify-between mb-2">
-                  <span
-                    className="text-[11px] font-semibold uppercase tracking-widest"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Appearance Mode
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onToggleAppearance}
-                    className="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                    style={{
-                      backgroundColor: 'var(--surface-elevated)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    {appearanceMode === 'dark' ? (
-                      <>
-                        <Moon className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
-                        <span>Dark Mode</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sun className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
-                        <span>Light Mode</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Colour Theme Selector inside Drawer */}
-              <div className="pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
-                <span
-                  className="text-[11px] font-semibold uppercase tracking-widest block mb-2.5"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Colour Theme Palette
-                </span>
-                <div className="space-y-1.5">
-                  {themes.map((t) => {
-                    const isSelected = activeTheme.id === t.id;
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => onSelectTheme(t)}
-                        className="w-full p-2.5 rounded-lg border flex items-center justify-between text-left transition-colors cursor-pointer"
-                        style={{
-                          backgroundColor: isSelected
-                            ? 'var(--surface-elevated)'
-                            : 'var(--surface)',
-                          borderColor: isSelected ? 'var(--primary)' : 'var(--border)',
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
-                            {t.name}
-                          </span>
-                          {isSelected && (
-                            <Check className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span
-                            className="w-4 h-4 rounded-full border border-black/15"
-                            style={{ backgroundColor: t.swatches.primary }}
-                          />
-                          <span
-                            className="w-4 h-4 rounded-full border border-black/15"
-                            style={{ backgroundColor: t.swatches.accent }}
-                          />
-                          <span
-                            className="w-4 h-4 rounded-full border border-black/15"
-                            style={{ backgroundColor: t.swatches.secondary }}
-                          />
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Drawer Footer: Merchant Login Entry & Contact */}
-            <div className="pt-6 mt-6 border-t space-y-3" style={{ borderColor: 'var(--border)' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsDrawerOpen(false);
-                  onOpenMerchant();
-                }}
-                className="w-full py-2.5 px-4 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              >
-                <Shield className="w-3.5 h-3.5" style={{ color: 'var(--primary)' }} />
-                <span>
-                  {isMerchantAuthenticated ? 'Open Merchant Workspace' : 'Merchant Login'}
-                </span>
-              </button>
-
-              <div className="flex items-center justify-between text-[11px] gap-2" style={{ color: 'var(--text-muted)' }}>
-                <a href={`tel:${cleanPhoneHref}`} className="flex items-center gap-1 hover:underline truncate">
-                  <Phone className="w-3 h-3 shrink-0" />
-                  <span className="tabular-nums">{storeSettings.phone}</span>
-                </a>
-                <a
-                  href={storeSettings.mapsUrl || '#footer-contact'}
-                  target={storeSettings.mapsUrl ? '_blank' : undefined}
-                  rel={storeSettings.mapsUrl ? 'noopener noreferrer' : undefined}
-                  className="flex items-center gap-1 hover:underline truncate"
-                >
-                  <MapPin className="w-3 h-3 shrink-0" />
-                  <span className="truncate">Store Map</span>
-                </a>
-              </div>
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {/* Main Content */}
-      <main>
-        {/* HERO SECTION */}
-        <section
-          id="home"
-          className="border-b transition-colors"
-          style={{
-            backgroundColor: 'var(--surface-elevated)',
-            borderColor: 'var(--border)',
-          }}
-        >
-          <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-10 sm:py-16 lg:py-20">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
-              {/* Left Column: Editorial Narrative */}
-              <div className="lg:col-span-7 space-y-6">
-                <div
-                  className="hero-animate-1 text-xs font-semibold tracking-[0.22em] uppercase"
-                  style={{ color: 'var(--accent)' }}
-                >
-                  {storeSettings.storeName} · Handcrafted Ethnic Wear
-                </div>
-
-                <h1
-                  className="hero-animate-1 font-serif text-4xl sm:text-5xl lg:text-6xl font-semibold leading-[1.08] tracking-tight"
-                  style={{ color: 'var(--text-main)', textWrap: 'balance' }}
-                >
-                  {storeSettings.tagline === DEFAULT_STORE_SETTINGS.tagline ? (
-                    <>
-                      Timeless Indian silhouettes, woven with{' '}
-                      <em className="italic font-normal" style={{ color: 'var(--primary)' }}>
-                        ishq.
-                      </em>
-                    </>
-                  ) : (
-                    storeSettings.tagline
-                  )}
-                </h1>
-
-                <p
-                  className="hero-animate-2 text-sm sm:text-base leading-relaxed max-w-xl"
-                  style={{ color: 'var(--text-secondary)' }}
-                >
-                  {storeSettings.brandDescription}
-                </p>
-
-                <div className="hero-animate-3 flex flex-wrap items-center gap-3.5 pt-1">
-                  <a
-                    href="#shop"
-                    className="px-6 py-3.5 rounded-lg text-xs font-semibold tracking-widest uppercase inline-flex items-center gap-2 shadow-sm transition-opacity hover:opacity-95 whitespace-nowrap"
-                    style={{
-                      backgroundColor: 'var(--primary)',
-                      color: 'var(--btn-text)',
-                    }}
-                  >
-                    <span>Explore Collection</span>
-                    <ArrowUpRight className="w-4 h-4" />
-                  </a>
-
-                  <a
-                    href="#story"
-                    className="px-5 py-3.5 rounded-lg border text-xs font-semibold tracking-widest uppercase inline-flex items-center gap-2 transition-colors whitespace-nowrap"
-                    style={{
-                      backgroundColor: 'var(--surface)',
-                      color: 'var(--text-main)',
-                      borderColor: 'var(--border)',
-                    }}
-                  >
-                    <span>Our Heritage Story</span>
-                  </a>
-
-                  {cleanWhatsapp && (
-                    <a
-                      href={`https://wa.me/${cleanWhatsapp}?text=${encodeURIComponent(
-                        `Namaste ${storeSettings.storeName}! I would like to inquire about your ethnic wear collection.`
-                      )}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-4 py-3.5 rounded-lg border text-xs font-semibold tracking-wider uppercase inline-flex items-center gap-2 transition-colors whitespace-nowrap"
-                      style={{
-                        backgroundColor: 'var(--surface)',
-                        color: 'var(--primary)',
-                        borderColor: 'var(--border)',
-                      }}
-                    >
-                      <MessageCircle className="w-4 h-4" />
-                      <span>WhatsApp Boutique</span>
-                    </a>
-                  )}
-                </div>
-
-                {/* Unboxed Editorial Metadata */}
-                <div
-                  className="hero-animate-3 pt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  <span>Authentic Handloom & Craft</span>
-                  {activePaymentLabels.length > 0 && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span>{activePaymentLabels.join(' & ')}</span>
-                    </>
-                  )}
-                  <span aria-hidden="true">·</span>
-                  <span>Pan-India Express Delivery</span>
-                </div>
-              </div>
-
-              {/* Right Column: Hero Showcase Image */}
-              <div className="lg:col-span-5">
-                <div
-                  className="relative aspect-[4/5] w-full max-w-md mx-auto lg:max-w-none rounded-2xl overflow-hidden border shadow-xl"
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                  }}
-                >
-                  {!heroImgError ? (
-                    <img
-                      src={heroImageSrc}
-                      alt={`${storeSettings.storeName} festive ethnic wear showcase`}
-                      referrerPolicy="no-referrer"
-                      onError={() => setHeroImgError(true)}
-                      className="w-full h-full object-cover object-center"
-                    />
-                  ) : (
-                    <div
-                      className="w-full h-full flex flex-col items-center justify-center p-8 text-center"
-                      style={{ backgroundColor: 'var(--secondary)', color: 'var(--primary)' }}
-                    >
-                      <span className="font-serif italic text-3xl">{storeSettings.storeName}</span>
-                      <span className="text-xs uppercase tracking-widest mt-2">
-                        The Festive Edit · 2026
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Measured Contrast Scrim */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/15 to-transparent pointer-events-none" />
-
-                  <div className="absolute bottom-5 left-5 right-5 text-white flex items-end justify-between gap-4">
-                    <div>
-                      <span className="text-[11px] uppercase tracking-widest text-amber-200 block font-semibold">
-                        Signature Collection
-                      </span>
-                      <p className="font-serif text-xl sm:text-2xl font-medium">
-                        {storeSettings.storeName}
-                      </p>
-                    </div>
-                    <span className="text-xs font-medium text-white/90 tabular-nums">
-                      {products.length} {products.length === 1 ? 'Curated Piece' : 'Curated Pieces'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* SHOP CATALOG SECTION */}
-        <section
-          id="shop"
-          className="reveal-section max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-14 sm:py-20"
-        >
-          {/* Section Header & Search Bar */}
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
-            <div>
-              <div
-                className="text-xs font-semibold tracking-[0.2em] uppercase mb-1.5"
-                style={{ color: 'var(--accent)' }}
-              >
-                Curated Wardrobe
-              </div>
-              <h2
-                className="font-serif text-3xl sm:text-4xl font-semibold tracking-tight"
-                style={{ color: 'var(--text-main)' }}
-              >
-                Pieces to Fall For
-              </h2>
-              <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-                Handcrafted silhouettes tailored in small batches for lasting comfort and grace.
-              </p>
-            </div>
-
-            {/* Search Input */}
-            <div className="w-full md:w-80">
-              <label htmlFor="catalog-search" className="sr-only">
-                Search catalog
-              </label>
-              <div className="relative">
-                <Search
-                  className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                  style={{ color: 'var(--text-muted)' }}
-                />
-                <input
-                  id="catalog-search"
-                  type="text"
-                  placeholder="Search kurtis, sarees, suits, fabrics..."
-                  value={searchQuery}
-                  onChange={(e) => onSearchChange(e.target.value)}
-                  className="w-full pl-10 pr-9 py-2.5 rounded-lg border text-xs sm:text-sm transition-colors"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => onSearchChange('')}
-                    aria-label="Clear search query"
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded cursor-pointer"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  {storeSettings.categoriesTitle || 'Featured Categories'}
+                </h2>
+                {storeSettings.categoriesSubtitle && (
+                  <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-secondary)' }}>
+                    {storeSettings.categoriesSubtitle}
+                  </p>
                 )}
               </div>
-            </div>
-          </div>
-
-          {/* Interactive Category Filter Bar */}
-          <div
-            className="flex items-center gap-2 overflow-x-auto pb-2 mb-8 scrollbar-none"
-            role="tablist"
-            aria-label="Product category filters"
-          >
-            {categories.map((cat) => {
-              const active = activeCategory === cat.id;
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => onCategoryChange(cat.id)}
-                  className="px-4 py-2.5 rounded-lg text-xs font-semibold tracking-wider uppercase transition-colors border whitespace-nowrap shrink-0 cursor-pointer"
-                  style={{
-                    backgroundColor: active ? 'var(--primary)' : 'var(--surface)',
-                    color: active ? 'var(--btn-text)' : 'var(--text-secondary)',
-                    borderColor: active ? 'var(--primary)' : 'var(--border)',
-                  }}
-                >
-                  {cat.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dynamic Product Grid */}
-          {isLoading ? (
-            <div
-              className="py-24 text-center rounded-xl border"
-              style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
-            >
-              <Loader2
-                className="w-8 h-8 animate-spin mx-auto mb-3"
-                style={{ color: 'var(--primary)' }}
-              />
-              <p className="font-serif text-xl" style={{ color: 'var(--text-main)' }}>
-                Loading boutique catalog...
-              </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                Synchronizing live availability
-              </p>
-            </div>
-          ) : error ? (
-            <div
-              className="py-16 px-6 text-center rounded-xl border max-w-md mx-auto"
-              style={{
-                backgroundColor: 'var(--error-bg)',
-                borderColor: 'var(--error-border)',
-                color: 'var(--error-text)',
-              }}
-            >
-              <p className="text-sm font-medium mb-4">{error}</p>
-              <button
-                type="button"
-                onClick={onRetryFetch}
-                className="px-4 py-2.5 rounded-lg text-xs font-semibold inline-flex items-center gap-2 cursor-pointer"
-                style={{
-                  backgroundColor: 'var(--primary)',
-                  color: 'var(--btn-text)',
-                }}
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Retry Loading</span>
-              </button>
-            </div>
-          ) : products.length === 0 ? (
-            <div
-              className="py-20 px-6 text-center rounded-xl border"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <p className="font-serif text-2xl" style={{ color: 'var(--text-main)' }}>
-                No pieces match your current filter.
-              </p>
-              <p className="text-xs mt-1.5" style={{ color: 'var(--text-muted)' }}>
-                Try searching for another fabric or browse all categories.
-              </p>
               <button
                 type="button"
                 onClick={() => {
                   onCategoryChange('All');
-                  onSearchChange('');
+                  scrollToCatalog();
                 }}
-                className="mt-5 px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer"
-                style={{
-                  backgroundColor: 'var(--primary)',
-                  color: 'var(--btn-text)',
-                }}
+                className="text-xs font-semibold uppercase tracking-wider hover:underline shrink-0 cursor-pointer"
+                style={{ color: 'var(--primary)' }}
               >
-                Reset All Filters
+                View All ({products.length}) →
               </button>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6">
-              {products.map((product) => (
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
+              {FEATURED_CATEGORY_CARDS.map((card) => {
+                const count = products.filter(
+                  (p) => p.category.toLowerCase() === card.id.toLowerCase()
+                ).length;
+                const isSelected = activeCategory === card.id;
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => {
+                      onCategoryChange(card.id);
+                      scrollToCatalog();
+                    }}
+                    className="group relative aspect-[4/5] sm:aspect-[3/4] rounded-xl overflow-hidden border text-left cursor-pointer shadow-sm transition-transform hover:-translate-y-0.5 min-w-0"
+                    style={{
+                      borderColor: isSelected ? 'var(--primary)' : 'var(--border)',
+                    }}
+                  >
+                    <img
+                      src={card.image}
+                      alt={card.title}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover object-top transition-transform duration-700 group-hover:scale-105"
+                    />
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background:
+                          'linear-gradient(to top, rgba(16, 8, 11, 0.88) 0%, rgba(16, 8, 11, 0.25) 55%, rgba(16, 8, 11, 0.05) 100%)',
+                      }}
+                    />
+                    <div className="absolute inset-x-0 bottom-0 p-3 sm:p-4 text-white">
+                      <span className="inline-block text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-white/20 backdrop-blur-xs mb-1">
+                        {count} {count === 1 ? 'Design' : 'Designs'}
+                      </span>
+                      <h3 className="font-serif text-base sm:text-xl font-bold leading-snug break-words">
+                        {card.title}
+                      </h3>
+                      <p className="text-[11px] text-white/80 line-clamp-1 mt-0.5">
+                        {card.subtitle}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        );
+
+      case 'newArrivals':
+        if (newArrivalProducts.length === 0) return null;
+        return (
+          <section
+            key="newArrivals"
+            aria-label="New Arrivals"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+          >
+            <div className="flex flex-wrap items-end justify-between gap-2 mb-4">
+              <div className="min-w-0">
+                <span
+                  className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  Fresh From Our Looms
+                </span>
+                <h2
+                  className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  {storeSettings.newArrivalsTitle || 'New Season Arrivals'}
+                </h2>
+                {storeSettings.newArrivalsSubtitle && (
+                  <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-secondary)' }}>
+                    {storeSettings.newArrivalsSubtitle}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={scrollToCatalog}
+                className="text-xs font-semibold uppercase tracking-wider hover:underline shrink-0 cursor-pointer"
+                style={{ color: 'var(--primary)' }}
+              >
+                Browse Full Collection →
+              </button>
+            </div>
+
+            <div className={`grid ${desktopGridColsClass} gap-4 sm:gap-5 min-w-0`}>
+              {newArrivalProducts.map((product) => (
                 <ProductCard
-                  key={product.id}
+                  key={`new-arrival-${product.id}`}
                   product={product}
+                  storeSettings={storeSettings}
                   onAddToCart={onAddToCart}
                   onWishlistClick={onWishlistClick}
                   onSelectProduct={onSelectProduct}
                 />
               ))}
             </div>
-          )}
-        </section>
+          </section>
+        );
 
-        {/* HERITAGE & CRAFTSMANSHIP STORY SECTION */}
-        <section
-          id="story"
-          className="reveal-section border-t transition-colors"
-          style={{
-            backgroundColor: 'var(--surface-elevated)',
-            borderColor: 'var(--border)',
-          }}
-        >
-          <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-16 sm:py-20">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
-              <div className="lg:col-span-5">
+      case 'promoBanner':
+        return (
+          <section
+            key="promoBanner"
+            aria-label="Promotional Spotlight"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+          >
+            <div
+              className="relative rounded-2xl overflow-hidden border shadow-md min-h-[220px] sm:min-h-[260px] flex items-center"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              {promoBanner.imageUrl && (
+                <img
+                  src={promoBanner.imageUrl}
+                  alt={promoBanner.heading}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="absolute inset-0 w-full h-full object-cover object-center"
+                />
+              )}
+              <div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    'linear-gradient(90deg, rgba(16, 8, 11, 0.88) 0%, rgba(16, 8, 11, 0.68) 55%, rgba(16, 8, 11, 0.35) 100%)',
+                }}
+              />
+              <div className="relative z-10 p-6 sm:p-10 max-w-2xl text-white space-y-3 min-w-0">
+                {promoBanner.badge && (
+                  <span
+                    className="inline-block text-[10px] font-bold uppercase tracking-[0.2em] px-3 py-1 rounded"
+                    style={{
+                      backgroundColor: 'var(--accent)',
+                      color: '#1b1114',
+                    }}
+                  >
+                    {promoBanner.badge}
+                  </span>
+                )}
+                <h2 className="font-serif text-2xl sm:text-4xl font-bold leading-tight break-words">
+                  {promoBanner.heading}
+                </h2>
+                {promoBanner.subtext && (
+                  <p className="text-xs sm:text-sm text-white/90 leading-relaxed break-words">
+                    {promoBanner.subtext}
+                  </p>
+                )}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        promoBanner.ctaCategory &&
+                        CATEGORIES.includes(promoBanner.ctaCategory)
+                      ) {
+                        onCategoryChange(promoBanner.ctaCategory);
+                      }
+                      scrollToCatalog();
+                    }}
+                    className="px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest transition cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
+                    }}
+                  >
+                    {promoBanner.ctaText || 'Explore Sarees'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        );
+
+      case 'story':
+        return (
+          <section
+            key="story"
+            id="story"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+          >
+            <div
+              className="rounded-2xl border p-5 sm:p-8 shadow-xs transition-colors min-w-0"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+              }}
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_0.8fr] gap-6 items-center min-w-0">
+                <div className="space-y-3 min-w-0">
+                  <div
+                    className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.18em]"
+                    style={{ color: 'var(--primary)' }}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                    <span>{brandTagline}</span>
+                  </div>
+                  <h2
+                    className="font-serif text-2xl sm:text-3xl font-bold leading-snug break-words"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    {storeSettings.storyHeading || `The ${brandName} Heritage`}
+                  </h2>
+                  {storeSettings.storyQuote && (
+                    <p
+                      className="font-serif italic text-base sm:text-lg break-words"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      {storeSettings.storyQuote}
+                    </p>
+                  )}
+                  <p
+                    className="text-xs sm:text-sm leading-relaxed break-words"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {brandDescription}
+                  </p>
+
+                  {(storeAddress || storePhone || mapsUrl) && (
+                    <div className="pt-2 flex flex-wrap items-center gap-2 text-xs">
+                      {storeAddress && (
+                        <span
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border max-w-full"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <MapPin
+                            className="w-3.5 h-3.5 shrink-0"
+                            style={{ color: 'var(--primary)' }}
+                          />
+                          <span className="truncate">{storeAddress}</span>
+                        </span>
+                      )}
+                      {storePhone && (
+                        <a
+                          href={`tel:${storePhone.replace(/\s+/g, '')}`}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium hover:opacity-90"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        >
+                          <Phone
+                            className="w-3.5 h-3.5 shrink-0"
+                            style={{ color: 'var(--primary)' }}
+                          />
+                          <span>{storePhone}</span>
+                        </a>
+                      )}
+                      {mapsUrl && (
+                        <a
+                          href={mapsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border font-semibold hover:opacity-90"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--primary)',
+                          }}
+                        >
+                          <span>Directions</span>
+                          <ExternalLink className="w-3 h-3 shrink-0" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Trust & Authenticity Pillars */}
+                <div className="grid grid-cols-2 gap-3 min-w-0">
+                  {[
+                    {
+                      icon: Award,
+                      title: 'Authentic Weaves',
+                      desc: '100% pure zari & handloom certified',
+                    },
+                    {
+                      icon: Truck,
+                      title: 'Insured Delivery',
+                      desc: `Free shipping above ₹${(
+                        storeSettings.freeShippingThreshold ?? 1999
+                      ).toLocaleString('en-IN')}`,
+                    },
+                    {
+                      icon: RefreshCcw,
+                      title: 'Easy 7-Day Returns',
+                      desc: 'Hassle-free size exchange',
+                    },
+                    {
+                      icon: ShieldCheck,
+                      title: 'Secure Checkout',
+                      desc: 'Dynamic UPI QR & COD support',
+                    },
+                  ].map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3.5 rounded-xl border flex flex-col gap-1.5 min-w-0"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        borderColor: 'var(--border)',
+                      }}
+                    >
+                      <item.icon className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
+                      <strong
+                        className="text-xs font-semibold block break-words"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        {item.title}
+                      </strong>
+                      <span
+                        className="text-[11px] leading-snug break-words"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {item.desc}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        );
+
+      case 'collections':
+        return (
+          <section
+            key="collections"
+            aria-label="Additional Curated Collections"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+          >
+            <div className="mb-4">
+              <span
+                className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                style={{ color: 'var(--primary)' }}
+              >
+                Regional Craft Edits
+              </span>
+              <h2
+                className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Curated Heritage Capsules
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+              {CURATED_CRAFT_COLLECTIONS.map((col) => (
                 <div
-                  className="p-8 sm:p-10 rounded-2xl border text-center space-y-4"
+                  key={col.title}
+                  className="group rounded-xl overflow-hidden border flex flex-col justify-between shadow-2xs min-w-0"
                   style={{
                     backgroundColor: 'var(--surface)',
                     borderColor: 'var(--border)',
                   }}
                 >
-                  <span
-                    className="text-xs font-semibold uppercase tracking-[0.22em] block"
-                    style={{ color: 'var(--accent)' }}
-                  >
-                    Artisanal Promise
-                  </span>
-                  <blockquote
-                    className="font-serif italic text-3xl sm:text-4xl leading-snug"
-                    style={{ color: 'var(--primary)' }}
-                  >
-                    “A little tradition. A lot of you.”
-                  </blockquote>
-                  <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                    Every silhouette is finished by master karigars in Jaipur and Varanasi,
-                    honoring centuries-old hand-block printing, zari weaving, and zardozi work.
-                  </p>
+                  <div className="relative aspect-[16/10] overflow-hidden">
+                    <img
+                      src={col.image}
+                      alt={col.title}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                    />
+                    <span
+                      className="absolute top-3 left-3 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded shadow-xs"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
+                    >
+                      {col.badge}
+                    </span>
+                  </div>
+                  <div className="p-4 space-y-2 flex-1 flex flex-col justify-between min-w-0">
+                    <div>
+                      <h3
+                        className="font-serif text-xl font-bold break-words"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        {col.title}
+                      </h3>
+                      <p
+                        className="text-xs mt-1 leading-relaxed break-words"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        {col.desc}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCategoryChange(col.id);
+                        scrollToCatalog();
+                      }}
+                      className="pt-2 text-xs font-semibold uppercase tracking-wider text-left hover:underline cursor-pointer"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      Explore {col.id} →
+                    </button>
+                  </div>
                 </div>
+              ))}
+            </div>
+          </section>
+        );
+
+      case 'testimonials':
+        if (testimonials.length === 0) return null;
+        return (
+          <section
+            key="testimonials"
+            aria-label="Customer Testimonials"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+          >
+            <div className="mb-4">
+              <span
+                className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                style={{ color: 'var(--primary)' }}
+              >
+                Verified Patron Stories
+              </span>
+              <h2
+                className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Customer Love & Testimonials
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+              {testimonials.map((t) => (
+                <div
+                  key={t.id}
+                  className="p-5 rounded-xl border flex flex-col justify-between gap-3 shadow-2xs min-w-0"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
+                  <div className="space-y-2.5 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-0.5" style={{ color: 'var(--accent)' }}>
+                        {Array.from({ length: Math.min(5, Math.max(1, t.rating || 5)) }).map(
+                          (_, i) => (
+                            <Star key={i} className="w-3.5 h-3.5 fill-current" />
+                          )
+                        )}
+                      </div>
+                      <Quote
+                        className="w-4 h-4 opacity-30 shrink-0"
+                        style={{ color: 'var(--primary)' }}
+                      />
+                    </div>
+                    <p
+                      className="text-xs leading-relaxed italic break-words"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      “{t.quote}”
+                    </p>
+                  </div>
+                  <div
+                    className="pt-2 border-t flex items-center justify-between gap-2 text-xs"
+                    style={{ borderColor: 'var(--border)' }}
+                  >
+                    <div className="min-w-0">
+                      <strong
+                        className="block font-semibold truncate"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        {t.customerName}
+                      </strong>
+                      {t.location && (
+                        <span
+                          className="text-[11px] truncate block"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          {t.location}
+                        </span>
+                      )}
+                    </div>
+                    {t.productBought && (
+                      <span
+                        className="text-[10px] font-semibold px-2 py-0.5 rounded border truncate max-w-[45%]"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--primary)',
+                        }}
+                      >
+                        {t.productBought}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+
+      case 'newsletter':
+        return (
+          <section
+            key="newsletter"
+            aria-label="Newsletter Dispatch"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+          >
+            <div
+              className="rounded-2xl border p-6 sm:p-8 text-center max-w-3xl mx-auto space-y-3 shadow-xs"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+              }}
+            >
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center mx-auto border"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--primary)',
+                }}
+              >
+                <Mail className="w-4 h-4" />
+              </div>
+              <h2
+                className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                style={{ color: 'var(--text-main)' }}
+              >
+                {storeSettings.newsletterHeading || 'Join the Indian Ishq Privé List'}
+              </h2>
+              <p
+                className="text-xs sm:text-sm max-w-xl mx-auto leading-relaxed break-words"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {storeSettings.newsletterSubtext ||
+                  'Receive early access to small-batch Banarasi weaves, seasonal Chanderi edits, and private boutique previews.'}
+              </p>
+
+              {newsletterSubmitted ? (
+                <div
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border text-xs font-semibold"
+                  style={{
+                    backgroundColor: 'var(--success-bg)',
+                    borderColor: 'var(--success-border)',
+                    color: 'var(--success-text)',
+                  }}
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Thank you for subscribing! You are on our private preview list.</span>
+                </div>
+              ) : (
+                <form
+                  onSubmit={handleNewsletterSubmit}
+                  className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 max-w-md mx-auto pt-2"
+                >
+                  <input
+                    type="email"
+                    required
+                    value={newsletterEmail}
+                    onChange={(e) => setNewsletterEmail(e.target.value)}
+                    placeholder="Enter your email address..."
+                    aria-label="Email address for newsletter"
+                    className="flex-1 min-w-0 px-3.5 py-2.5 rounded-lg border text-xs outline-none"
+                    style={{
+                      backgroundColor: 'var(--input-bg)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest cursor-pointer shrink-0"
+                    style={{
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
+                    }}
+                  >
+                    Subscribe
+                  </button>
+                </form>
+              )}
+            </div>
+          </section>
+        );
+
+      case 'bestsellers':
+        return (
+          <main
+            key="bestsellers"
+            id="catalog"
+            className="max-w-[1280px] mx-auto px-3 sm:px-4 py-8 sm:py-10 min-w-0"
+          >
+            <div id="shop" />
+            {/* Section Heading & Controls */}
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-5 min-w-0">
+              <div className="min-w-0">
+                <span
+                  className="text-xs uppercase tracking-[0.2em] font-semibold block mb-1"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  Handpicked Heritage
+                </span>
+                <h2
+                  className="font-serif text-2xl sm:text-4xl font-bold break-words"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  {storeSettings.bestsellersTitle || 'Bestsellers & Featured Pieces'}
+                </h2>
+                <p className="text-xs sm:text-sm mt-1 break-words" style={{ color: 'var(--text-secondary)' }}>
+                  {storeSettings.bestsellersSubtitle ||
+                    `Showing ${filteredProducts.length} of ${products.length} handcrafted pieces`}
+                </p>
               </div>
 
-              <div className="lg:col-span-7 space-y-4">
+              {/* Sort & Filter Bar */}
+              <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                {/* In-Stock Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setInStockOnly(!inStockOnly)}
+                  className="px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  style={{
+                    backgroundColor: inStockOnly ? 'var(--primary)' : 'var(--surface)',
+                    color: inStockOnly ? 'var(--btn-text)' : 'var(--text-main)',
+                    borderColor: inStockOnly ? 'var(--primary)' : 'var(--border)',
+                  }}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>In Stock Only</span>
+                </button>
+
+                {/* More Filters Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowFiltersPanel(!showFiltersPanel)}
+                  className="px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  style={{
+                    backgroundColor: showFiltersPanel ? 'var(--primary)' : 'var(--surface)',
+                    color: showFiltersPanel ? 'var(--btn-text)' : 'var(--text-main)',
+                    borderColor: showFiltersPanel ? 'var(--primary)' : 'var(--border)',
+                  }}
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                  <span>Budget Filter</span>
+                  {activeFilterCount > 0 && (
+                    <span
+                      className="px-1.5 py-0.2 rounded-full text-[10px] font-bold"
+                      style={{
+                        backgroundColor: showFiltersPanel ? 'var(--surface)' : 'var(--primary)',
+                        color: showFiltersPanel ? 'var(--primary)' : 'var(--btn-text)',
+                      }}
+                    >
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Sort Select */}
                 <div
-                  className="text-xs font-semibold tracking-[0.22em] uppercase"
-                  style={{ color: 'var(--accent)' }}
+                  className="flex items-center gap-1.5 border rounded-lg px-3 py-1.5 max-w-full"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                  }}
                 >
-                  The Indian Ishq Feeling
-                </div>
-                <h2
-                  className="font-serif text-3xl sm:text-4xl font-semibold leading-tight"
-                  style={{ color: 'var(--text-main)', textWrap: 'balance' }}
-                >
-                  Clothes with a heart of their own.
-                </h2>
-                <p
-                  className="text-sm sm:text-base leading-relaxed"
-                  style={{ color: 'var(--text-secondary)' }}
-                >
-                  From breathable everyday mulmul cottons to heirloom Banarasi Katan silks tailored
-                  for your biggest celebrations, Indian Ishq Collection brings together colour,
-                  craft, and effortless comfort. Founded as an independent Indian boutique, every
-                  piece is inspected by hand before dispatch.
-                </p>
-
-                <div
-                  className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t"
-                  style={{ borderColor: 'var(--border)' }}
-                >
-                  <div>
-                    <strong
-                      className="font-serif text-xl block"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      100% Authentic
-                    </strong>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Pure Mulmul, Chanderi & Katan Silk
-                    </span>
-                  </div>
-                  <div>
-                    <strong
-                      className="font-serif text-xl block"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      24-Hr Dispatch
-                    </strong>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Shipped directly from our boutique
-                    </span>
-                  </div>
-                  <div>
-                    <strong
-                      className="font-serif text-xl block"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      UPI & COD
-                    </strong>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      Instant QR payment or pay at doorstep
-                    </span>
-                  </div>
-                </div>
-
-                {/* Live Delivery & Return Policy Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-                  <div
-                    className="p-4 rounded-xl border space-y-1.5"
-                    style={{
-                      backgroundColor: 'var(--surface)',
-                      borderColor: 'var(--border)',
-                    }}
+                  <ArrowUpDown
+                    className="w-3.5 h-3.5 shrink-0"
+                    style={{ color: 'var(--primary)' }}
+                  />
+                  <span
+                    className="text-[11px] font-medium shrink-0"
+                    style={{ color: 'var(--text-muted)' }}
                   >
-                    <div
-                      className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      <Truck className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
-                      <span>Delivery & Shipping Policy</span>
-                    </div>
-                    <p
-                      className="text-xs leading-relaxed"
-                      style={{ color: 'var(--text-secondary)' }}
-                    >
-                      {storeSettings.deliveryPolicy}
-                    </p>
-                  </div>
-
-                  <div
-                    className="p-4 rounded-xl border space-y-1.5"
-                    style={{
-                      backgroundColor: 'var(--surface)',
-                      borderColor: 'var(--border)',
-                    }}
+                    Sort:
+                  </span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as SortOption)}
+                    aria-label="Sort products by"
+                    className="text-xs font-semibold bg-transparent outline-none cursor-pointer min-w-0"
+                    style={{ color: 'var(--text-main)' }}
                   >
-                    <div
-                      className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: 'var(--primary)' }}
+                    <option
+                      value="featured"
+                      style={{ backgroundColor: 'var(--surface)', color: 'var(--text-main)' }}
                     >
-                      <RotateCcw className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
-                      <span>Return & Exchange Policy</span>
-                    </div>
-                    <p
-                      className="text-xs leading-relaxed"
-                      style={{ color: 'var(--text-secondary)' }}
+                      Featured
+                    </option>
+                    <option
+                      value="price-asc"
+                      style={{ backgroundColor: 'var(--surface)', color: 'var(--text-main)' }}
                     >
-                      {storeSettings.returnPolicy}
-                    </p>
-                  </div>
+                      Price: Low to High
+                    </option>
+                    <option
+                      value="price-desc"
+                      style={{ backgroundColor: 'var(--surface)', color: 'var(--text-main)' }}
+                    >
+                      Price: High to Low
+                    </option>
+                  </select>
                 </div>
               </div>
             </div>
+
+            {/* Expandable Filter Drawer */}
+            {showFiltersPanel && (
+              <div
+                className="mb-6 p-4 rounded-xl border shadow-xs grid grid-cols-1 sm:grid-cols-2 gap-4 items-center"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                {/* Price Range Slider */}
+                <div>
+                  <div className="flex justify-between text-[11px] font-semibold uppercase tracking-wider mb-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Max Budget</span>
+                    <span style={{ color: 'var(--primary)' }}>{formatINR(maxPriceFilter)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={800}
+                    max={highestCatalogPrice}
+                    step={200}
+                    value={maxPriceFilter}
+                    onChange={(e) => setMaxPriceFilter(Number(e.target.value))}
+                    className="w-full cursor-pointer"
+                    style={{ accentColor: 'var(--primary)' }}
+                  />
+                  <div
+                    className="flex justify-between text-[10px] mt-0.5"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <span>₹800</span>
+                    <span>{formatINR(highestCatalogPrice)}</span>
+                  </div>
+                </div>
+
+                {/* Reset Controls */}
+                <div className="flex sm:justify-end items-end h-full">
+                  <button
+                    type="button"
+                    onClick={resetAllFilters}
+                    className="px-4 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Reset All Filters</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Category Pills (Wraps cleanly without horizontal scroll overflow) */}
+            <div className="flex flex-wrap gap-2 pb-4 mb-5">
+              {CATEGORIES.map((cat) => {
+                const isActive = activeCategory === cat;
+                const count =
+                  cat === 'All'
+                    ? products.length
+                    : products.filter((p) => p.category.toLowerCase() === cat.toLowerCase()).length;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => onCategoryChange(cat)}
+                    className="px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 border"
+                    style={{
+                      backgroundColor: isActive ? 'var(--primary)' : 'var(--surface)',
+                      color: isActive ? 'var(--btn-text)' : 'var(--text-main)',
+                      borderColor: isActive ? 'var(--primary)' : 'var(--border)',
+                    }}
+                  >
+                    <span>{cat}</span>
+                    <span
+                      className="text-[10px] px-1.5 py-0.2 rounded-full"
+                      style={{
+                        backgroundColor: isActive
+                          ? 'rgba(255,255,255,0.2)'
+                          : 'var(--surface-elevated)',
+                        color: isActive ? 'var(--btn-text)' : 'var(--text-muted)',
+                      }}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Loading / Error / Grid */}
+            {isLoading ? (
+              <div className={`grid ${desktopGridColsClass} gap-5`}>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                  <div
+                    key={n}
+                    className="rounded-xl border p-4 h-[420px] animate-pulse flex flex-col justify-between"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <div
+                      className="aspect-[3/4] rounded-lg"
+                      style={{ backgroundColor: 'var(--surface-elevated)' }}
+                    />
+                    <div className="space-y-2">
+                      <div
+                        className="h-4 rounded w-2/3"
+                        style={{ backgroundColor: 'var(--surface-elevated)' }}
+                      />
+                      <div
+                        className="h-3 rounded w-full"
+                        style={{ backgroundColor: 'var(--surface-elevated)' }}
+                      />
+                      <div
+                        className="h-8 rounded w-full mt-2"
+                        style={{ backgroundColor: 'var(--surface-elevated)' }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : error ? (
+              <div
+                className="border rounded-xl p-8 text-center my-8"
+                style={{
+                  backgroundColor: 'var(--error-bg)',
+                  borderColor: 'var(--error-border)',
+                  color: 'var(--error-text)',
+                }}
+              >
+                <p className="font-serif text-xl font-semibold">Unable to load catalog</p>
+                <p className="text-xs mt-1">{error}</p>
+                <button
+                  type="button"
+                  onClick={onRetryFetch}
+                  className="mt-4 px-5 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--primary)',
+                    color: 'var(--btn-text)',
+                  }}
+                >
+                  Retry Connection
+                </button>
+              </div>
+            ) : filteredProducts.length === 0 ? (
+              <div
+                className="rounded-xl border p-12 text-center my-6"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <p
+                  className="font-serif text-2xl font-semibold"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  No matching designs found
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Try clearing your search filter or adjusting your maximum budget slider.
+                </p>
+                <button
+                  type="button"
+                  onClick={resetAllFilters}
+                  className="mt-4 px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--primary)',
+                    color: 'var(--btn-text)',
+                  }}
+                >
+                  Reset All Filters
+                </button>
+              </div>
+            ) : (
+              <div className={`grid ${desktopGridColsClass} gap-5 min-w-0`}>
+                {filteredProducts.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    storeSettings={storeSettings}
+                    onAddToCart={onAddToCart}
+                    onWishlistClick={onWishlistClick}
+                    onSelectProduct={onSelectProduct}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Bespoke Bridal & Styling Banner */}
+            <section
+              className="mt-12 rounded-2xl p-6 sm:p-8 border flex flex-col md:flex-row items-center justify-between gap-6"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                borderColor: 'var(--border)',
+              }}
+            >
+              <div className="space-y-2 max-w-xl min-w-0">
+                <div
+                  className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  <HeartHandshake className="w-4 h-4 shrink-0" />
+                  <span>Bespoke Bridal & Custom Tailoring</span>
+                </div>
+                <h3
+                  className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Need custom blouse stitching, petticoat fall-pico, or bridal consultation?
+                </h3>
+                <p
+                  className="text-xs leading-relaxed break-words"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  Our master tailors customize sleeve lengths, necklines, and measurements before
+                  dispatch. Connect directly with our stylists on WhatsApp for personalized video
+                  previews of any silk saree or festive ensemble.
+                </p>
+              </div>
+
+              {whatsappClean && storeSettings.whatsappOrderEnabled !== false && (
+                <a
+                  href={`https://wa.me/${whatsappClean}?text=${encodeURIComponent(
+                    `Namaste ${brandName}! I would like to inquire about custom styling / blouse stitching.`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-6 py-3.5 rounded-xl bg-emerald-700 text-white text-xs font-bold uppercase tracking-widest shadow-md hover:bg-emerald-800 transition flex items-center gap-2 shrink-0"
+                >
+                  <MessageCircle className="w-4 h-4 shrink-0" />
+                  <span>Chat with a Stylist</span>
+                </a>
+              )}
+            </section>
+          </main>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col overflow-x-hidden max-w-full">
+      {/* 1. COMPACT STICKY HEADER + OPTIONAL ANNOUNCEMENT BAR */}
+      <header
+        className="sticky top-0 z-30 backdrop-blur-md border-b transition-colors max-w-full"
+        style={{
+          backgroundColor: 'var(--header-bg)',
+          borderColor: 'var(--border)',
+        }}
+      >
+        {/* Slim Announcement Bar */}
+        {showAnnouncementBar && (
+          <div
+            className="text-[11px] tracking-wider uppercase py-1 px-3 text-center font-medium truncate"
+            style={{
+              backgroundColor: 'var(--primary)',
+              color: 'var(--btn-text)',
+            }}
+          >
+            {announcementText}
           </div>
-        </section>
-      </main>
+        )}
+
+        <div className="max-w-[1280px] mx-auto px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 min-w-0">
+          {/* Brand Logo */}
+          <a
+            href="#top"
+            className="flex items-center gap-2.5 group focus:outline-none min-w-0 shrink"
+          >
+            {storeSettings.logoUrl ? (
+              <img
+                src={storeSettings.logoUrl}
+                alt={brandName}
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shadow-sm border shrink-0"
+                style={{ borderColor: 'var(--border)' }}
+              />
+            ) : (
+              <div
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-serif font-bold text-base sm:text-lg tracking-wider shadow-sm transition-transform group-hover:scale-105 shrink-0"
+                style={{
+                  backgroundColor: 'var(--primary)',
+                  color: 'var(--btn-text)',
+                  border: '2px solid var(--accent)',
+                }}
+              >
+                {brandName.slice(0, 2).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0">
+              <span
+                className="font-serif text-lg sm:text-2xl font-bold tracking-wide block leading-none truncate"
+                style={{ color: 'var(--primary)' }}
+              >
+                {brandName}
+              </span>
+              <span
+                className="hidden sm:block text-[10px] tracking-[0.18em] uppercase font-medium mt-0.5 truncate"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                {brandTagline}
+              </span>
+            </div>
+          </a>
+
+          {/* Desktop Quick Category Links */}
+          <nav aria-label="Primary Categories" className="hidden xl:flex items-center gap-1">
+            {CATEGORIES.map((cat) => {
+              const isActive = activeCategory === cat;
+              return (
+                <a
+                  key={cat}
+                  href="#catalog"
+                  onClick={() => onCategoryChange(cat)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors"
+                  style={{
+                    backgroundColor: isActive ? 'var(--primary)' : 'transparent',
+                    color: isActive ? 'var(--btn-text)' : 'var(--text-main)',
+                  }}
+                >
+                  {cat === 'All' ? 'Shop All' : cat}
+                </a>
+              );
+            })}
+          </nav>
+
+          {/* Actions: Search + Theme Controls + Cart + Merchant */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Desktop Search */}
+            <div
+              className="hidden md:flex items-center rounded-lg px-3 py-1.5 border w-48 lg:w-60 transition-colors"
+              style={{
+                backgroundColor: 'var(--input-bg)',
+                borderColor: 'var(--border)',
+              }}
+            >
+              <Search
+                className="w-3.5 h-3.5 mr-2 shrink-0"
+                style={{ color: 'var(--text-muted)' }}
+              />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => onSearchChange(e.target.value)}
+                placeholder="Search sarees, kurtis..."
+                aria-label="Search ethnic wear catalog"
+                className="bg-transparent text-xs w-full outline-none min-w-0"
+                style={{ color: 'var(--text-main)' }}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onSearchChange('')}
+                  aria-label="Clear search query"
+                  className="cursor-pointer"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Theme Selector Dropdown */}
+            {headerShowThemeControls && (
+              <div
+                className="hidden lg:flex items-center gap-1.5 rounded-lg px-2 py-1 border"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <Palette className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--primary)' }} />
+                <select
+                  aria-label="Select Store Colour Theme"
+                  value={activeTheme.id}
+                  onChange={(e) => {
+                    const found = themes.find((t) => t.id === e.target.value);
+                    if (found) onSelectTheme(found);
+                  }}
+                  className="text-xs font-medium bg-transparent outline-none cursor-pointer pr-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  {themes.map((t) => (
+                    <option
+                      key={t.id}
+                      value={t.id}
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        color: 'var(--text-main)',
+                      }}
+                    >
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Light / Dark Appearance Mode Toggle */}
+            {headerShowThemeControls && (
+              <button
+                type="button"
+                onClick={onToggleAppearance}
+                aria-label={
+                  appearanceMode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'
+                }
+                title={appearanceMode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
+              >
+                {appearanceMode === 'dark' ? (
+                  <Sun className="w-4 h-4 text-amber-400" />
+                ) : (
+                  <Moon className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+                )}
+              </button>
+            )}
+
+            {/* Mobile Theme Palette Modal Trigger */}
+            {headerShowThemeControls && (
+              <button
+                type="button"
+                onClick={onOpenThemeModal}
+                aria-label="Open Theme & Appearance Settings"
+                title="Theme Settings"
+                className="lg:hidden w-8 h-8 sm:w-9 sm:h-9 rounded-lg border flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--primary)',
+                }}
+              >
+                <Palette className="w-4 h-4" />
+              </button>
+            )}
+
+            {/* Shopping Bag Button */}
+            <button
+              type="button"
+              onClick={onOpenCart}
+              aria-label={`Open shopping bag with ${cartCount} items`}
+              className="px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase transition flex items-center gap-1.5 shadow-xs cursor-pointer shrink-0"
+              style={{
+                backgroundColor: 'var(--primary)',
+                color: 'var(--btn-text)',
+              }}
+            >
+              <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Bag</span>
+              <span
+                className="px-1.5 py-0.2 rounded-full text-[11px] font-bold tabular-nums"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#1b1114',
+                }}
+              >
+                {cartCount}
+              </span>
+            </button>
+
+            {/* Subtle Merchant Workspace Icon Trigger */}
+            <button
+              type="button"
+              onClick={onOpenMerchant}
+              aria-label={isMerchantAuthenticated ? 'Open Merchant Workspace' : 'Merchant Login'}
+              title={isMerchantAuthenticated ? 'Open Merchant Workspace' : 'Merchant Login'}
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border flex items-center justify-center transition-opacity opacity-80 hover:opacity-100 cursor-pointer shrink-0"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              <Lock className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Compact Mobile Search Bar */}
+        <div className="md:hidden px-3 pb-2">
+          <div
+            className="flex items-center rounded-lg px-3 py-1.5 border w-full"
+            style={{
+              backgroundColor: 'var(--input-bg)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <Search
+              className="w-3.5 h-3.5 mr-2 shrink-0"
+              style={{ color: 'var(--text-muted)' }}
+            />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search sarees, kurtis, festive wear..."
+              aria-label="Search ethnic wear catalog"
+              className="bg-transparent text-xs w-full outline-none min-w-0"
+              style={{ color: 'var(--text-main)' }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => onSearchChange('')}
+                aria-label="Clear search query"
+                className="cursor-pointer"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* 2. MERCHANT-CONFIGURABLE HOMEPAGE SECTIONS IN ORDER */}
+      {orderedHomepageSections.map((section) => renderHomepageSection(section))}
     </div>
   );
 };

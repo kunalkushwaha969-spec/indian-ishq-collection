@@ -104,7 +104,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     fetchStoreSettings().then(setLocalSettings).catch(() => {});
   }, [isOpen]);
 
-  const { total, shipping } = calculateCartSummary(cart, products);
+  const { total, shipping } = calculateCartSummary(
+    cart,
+    products,
+    storeSettings.freeShippingThreshold,
+    storeSettings.standardShippingFee
+  );
   const VPA_ADDRESS = storeSettings.upiVpa || 'indianishq@okaxis';
   const activeRazorpayKey = storeSettings.razorpayKeyId?.trim() || '';
   const razorpayAvailable = isRazorpayConfigured(activeRazorpayKey, storeSettings.razorpayEnabled);

@@ -256,4 +256,213 @@ test('resolveDefaultPaymentMethod chooses first enabled payment method', () => {
   );
 });
 
+import {
+  DEFAULT_HERO_SLIDES,
+  sanitizeHeroSlides,
+  reorderHeroSlides,
+  getActiveHeroSlides,
+} from './ecommerce.ts';
+
+test('sanitizeHeroSlides normalizes valid slides, strips blank image URLs, and falls back to defaults when empty', () => {
+  const fallback = sanitizeHeroSlides(null);
+  assert.equal(fallback.length, DEFAULT_HERO_SLIDES.length);
+  assert.equal(fallback[0].id, 'slide-1');
+
+  const sanitized = sanitizeHeroSlides([
+    {
+      id: 'custom-2',
+      imageUrl: 'https://example.com/saree.jpg',
+      title: 'Royal Silk Edit',
+      subtitle: 'Handwoven sarees',
+      ctaText: 'Shop Now',
+      ctaLink: '#shop',
+      categoryFilter: 'Sarees',
+      enabled: true,
+      order: 5,
+    },
+    {
+      id: 'blank-img',
+      imageUrl: '   ',
+      title: 'Ignored Slide',
+    },
+    {
+      id: 'custom-1',
+      imageUrl: 'https://example.com/kurti.jpg',
+      title: 'Everyday Mulmul',
+      subtitle: 'Soft cottons',
+      ctaText: 'Explore',
+      ctaLink: '#shop',
+      categoryFilter: 'Kurtis',
+      enabled: false,
+      order: 1,
+    },
+  ]);
+
+  assert.equal(sanitized.length, 2);
+  // Sorted by order (1 before 5) and re-indexed to 0, 1
+  assert.equal(sanitized[0].id, 'custom-1');
+  assert.equal(sanitized[0].order, 0);
+  assert.equal(sanitized[0].enabled, false);
+  assert.equal(sanitized[1].id, 'custom-2');
+  assert.equal(sanitized[1].order, 1);
+  assert.equal(sanitized[1].enabled, true);
+});
+
+test('reorderHeroSlides moves slides cleanly and updates sequential order indices', () => {
+  const reordered = reorderHeroSlides(DEFAULT_HERO_SLIDES, 0, 2);
+  assert.equal(reordered.length, 3);
+  assert.equal(reordered[0].id, 'slide-2');
+  assert.equal(reordered[0].order, 0);
+  assert.equal(reordered[1].id, 'slide-3');
+  assert.equal(reordered[1].order, 1);
+  assert.equal(reordered[2].id, 'slide-1');
+  assert.equal(reordered[2].order, 2);
+});
+
+test('getActiveHeroSlides filters disabled slides and provides a fallback slide if all are disabled', () => {
+  const partialDisabled = DEFAULT_HERO_SLIDES.map((s, i) => ({
+    ...s,
+    enabled: i !== 1, // disable slide-2
+  }));
+
+  const active = getActiveHeroSlides({
+    heroSlides: partialDisabled,
+    tagline: 'Custom Tagline',
+    brandDescription: 'Custom Description',
+    storeName: 'Indian Ishq Collection',
+  });
+  assert.equal(active.length, 2);
+  assert.equal(active[0].id, 'slide-1');
+  assert.equal(active[1].id, 'slide-3');
+
+  // All disabled -> returns 1 safe fallback slide using store tagline & coverPhoto
+  const allDisabled = DEFAULT_HERO_SLIDES.map((s) => ({ ...s, enabled: false }));
+  const fallbackActive = getActiveHeroSlides(
+    {
+      heroSlides: allDisabled,
+      tagline: 'Festive Couture 2026',
+      brandDescription: 'Handcrafted in Jaipur',
+      storeName: 'Indian Ishq Collection',
+    },
+    'https://example.com/custom-cover.jpg'
+  );
+  assert.equal(fallbackActive.length, 1);
+  assert.equal(fallbackActive[0].imageUrl, 'https://example.com/custom-cover.jpg');
+  assert.equal(fallbackActive[0].title, 'Festive Couture 2026');
+});
+
+import {
+  DEFAULT_HOMEPAGE_SECTIONS,
+  sanitizeHomepageSections,
+  reorderHomepageSections,
+  initialProducts,
+} from './ecommerce.ts';
+
+test('sanitizeHomepageSections preserves valid section ordering, appends missing default sections, and safeguards against disabling all sections', () => {
+  const defaults = sanitizeHomepageSections(null);
+  assert.equal(defaults.length, DEFAULT_HOMEPAGE_SECTIONS.length);
+  assert.equal(defaults[0].id, 'hero');
+
+  // Reorder categories before hero and enable testimonials
+  const custom = sanitizeHomepageSections([
+    { id: 'categories', label: 'Shop by Silhouette', description: 'Categories', enabled: true, order: 0 },
+    { id: 'hero', label: 'Hero Banner', description: 'Hero', enabled: true, order: 1 },
+    { id: 'testimonials', label: 'Patron Stories', description: 'Reviews', enabled: true, order: 2 },
+  ]);
+  assert.equal(custom.length, DEFAULT_HOMEPAGE_SECTIONS.length);
+  assert.equal(custom[0].id, 'categories');
+  assert.equal(custom[0].label, 'Shop by Silhouette');
+  assert.equal(custom[1].id, 'hero');
+  assert.equal(custom[2].id, 'testimonials');
+  assert.equal(custom[2].enabled, true);
+
+  // If merchant disables every single section, safeguard keeps hero & bestsellers enabled
+  const allOff = DEFAULT_HOMEPAGE_SECTIONS.map((s) => ({ ...s, enabled: false }));
+  const safeguarded = sanitizeHomepageSections(allOff);
+  assert.equal(
+    safeguarded.some((s) => s.id === 'bestsellers' && s.enabled),
+    true
+  );
+});
+
+test('reorderHomepageSections moves section cleanly and updates sequential order indices', () => {
+  const reordered = reorderHomepageSections(DEFAULT_HOMEPAGE_SECTIONS, 1, 0);
+  assert.equal(reordered[0].id, 'categories');
+  assert.equal(reordered[0].order, 0);
+  assert.equal(reordered[1].id, 'hero');
+  assert.equal(reordered[1].order, 1);
+});
+
+test('calculateCartSummary respects custom free shipping threshold and standard shipping fee', () => {
+  const cart = [{ id: 'prod-002', qty: 2 }]; // 2 * 899 = 1798
+  // With default 1999 threshold, 1798 has 99 shipping
+  const stdSummary = calculateCartSummary(cart, initialProducts);
+  assert.equal(stdSummary.subtotal, 1798);
+  assert.equal(stdSummary.shipping, 99);
+  assert.equal(stdSummary.freeShippingQualified, false);
+
+  // With custom 1500 threshold and 149 fee, 1798 qualifies for free shipping
+  const customFree = calculateCartSummary(cart, initialProducts, 1500, 149);
+  assert.equal(customFree.shipping, 0);
+  assert.equal(customFree.freeShippingQualified, true);
+
+  // With custom 2500 threshold and 149 fee, 1798 charges 149 shipping
+  const customPaid = calculateCartSummary(cart, initialProducts, 2500, 149);
+  assert.equal(customPaid.shipping, 149);
+  assert.equal(customPaid.total, 1798 + 149);
+});
+
+test('mergeAndSanitizeStoreSettings sanitizes custom colors, typography, radii, and mobile hero images', () => {
+  const merged = mergeAndSanitizeStoreSettings({
+    customColorsEnabled: true,
+    customColors: {
+      primary: '#801b32',
+      accent: 'not-a-hex-color', // should fallback to default accent
+      bg: '#faf5ef',
+      surface: '#ffffff',
+      textMain: '#1e1618',
+      buttonBg: '#801b32',
+      buttonText: '#ffffff',
+      border: '#e5d8d0',
+    },
+    headingFont: 'Playfair Display',
+    bodyFont: 'Noto Sans',
+    headingScale: 'large',
+    borderRadiusStyle: 'pill',
+    buttonStyle: 'outline',
+    gridColumnsDesktop: 3,
+    freeShippingThreshold: 1499,
+    standardShippingFee: 79,
+    heroSlides: [
+      {
+        id: 's1',
+        imageUrl: 'https://example.com/desktop.jpg',
+        mobileImageUrl: 'https://example.com/mobile.jpg',
+        title: 'Bridal Edit',
+        subtitle: 'Handcrafted',
+        ctaText: 'Shop',
+        ctaLink: '#shop',
+        overlayOpacity: 60,
+        enabled: true,
+        order: 0,
+      },
+    ],
+  });
+
+  assert.equal(merged.customColorsEnabled, true);
+  assert.equal(merged.customColors.primary, '#801b32');
+  assert.equal(merged.customColors.accent, '#b78a4b'); // fallback for invalid hex
+  assert.equal(merged.headingFont, 'Playfair Display');
+  assert.equal(merged.bodyFont, 'Noto Sans');
+  assert.equal(merged.headingScale, 'large');
+  assert.equal(merged.borderRadiusStyle, 'pill');
+  assert.equal(merged.buttonStyle, 'outline');
+  assert.equal(merged.gridColumnsDesktop, 3);
+  assert.equal(merged.freeShippingThreshold, 1499);
+  assert.equal(merged.standardShippingFee, 79);
+  assert.equal(merged.heroSlides[0].mobileImageUrl, 'https://example.com/mobile.jpg');
+  assert.equal(merged.heroSlides[0].overlayOpacity, 60);
+});
+
+
 

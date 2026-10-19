@@ -4,11 +4,47 @@ import { verifyAdminSession } from './api';
 import { addMerchantActivity } from './activity';
 import {
   type StoreSettings,
+  type HeroSlide,
+  type HomepageSectionConfig,
+  type HomepageSectionId,
+  type CustomColorOverrides,
+  type PromoBannerConfig,
+  type StoreTestimonial,
   DEFAULT_STORE_SETTINGS,
+  DEFAULT_HERO_SLIDES,
+  DEFAULT_HOMEPAGE_SECTIONS,
+  DEFAULT_CUSTOM_COLORS,
+  DEFAULT_PROMO_BANNER,
+  DEFAULT_TESTIMONIALS,
   mergeAndSanitizeStoreSettings,
+  sanitizeHeroSlides,
+  getActiveHeroSlides,
+  reorderHeroSlides,
+  sanitizeHomepageSections,
+  reorderHomepageSections,
 } from '../utils/ecommerce';
 
-export { type StoreSettings, DEFAULT_STORE_SETTINGS, mergeAndSanitizeStoreSettings };
+export {
+  type StoreSettings,
+  type HeroSlide,
+  type HomepageSectionConfig,
+  type HomepageSectionId,
+  type CustomColorOverrides,
+  type PromoBannerConfig,
+  type StoreTestimonial,
+  DEFAULT_STORE_SETTINGS,
+  DEFAULT_HERO_SLIDES,
+  DEFAULT_HOMEPAGE_SECTIONS,
+  DEFAULT_CUSTOM_COLORS,
+  DEFAULT_PROMO_BANNER,
+  DEFAULT_TESTIMONIALS,
+  mergeAndSanitizeStoreSettings,
+  sanitizeHeroSlides,
+  getActiveHeroSlides,
+  reorderHeroSlides,
+  sanitizeHomepageSections,
+  reorderHomepageSections,
+};
 
 export const STORE_SETTINGS_STORAGE_KEY = 'ishq_store_settings_v1';
 

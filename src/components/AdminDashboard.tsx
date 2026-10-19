@@ -21,6 +21,8 @@ import {
   getUnreadActivityCount,
 } from '../services/activity';
 import { ProductModal } from './ProductModal';
+import { HeroSlideshowManager } from './HeroSlideshowManager';
+import { StoreCustomization } from './StoreCustomization';
 import {
   type StoreSettings,
   DEFAULT_STORE_SETTINGS,
@@ -56,6 +58,7 @@ interface AdminDashboardProps {
   onClose: () => void;
   onCatalogChanged: () => void;
   onAuthChange: (authenticated: boolean) => void;
+  onThemePreviewChange?: (themeId: string, mode: 'light' | 'dark' | 'system') => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -63,6 +66,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onClose,
   onCatalogChanged,
   onAuthChange,
+  onThemePreviewChange,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
@@ -71,7 +75,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [loginError, setLoginError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'inventory' | 'orders' | 'activity' | 'settings'
+    'overview' | 'inventory' | 'orders' | 'activity' | 'customization' | 'slideshow' | 'settings'
   >('overview');
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -201,9 +205,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!storeSettings.codEnabled && !storeSettings.upiEnabled && !storeSettings.razorpayEnabled) {
+  const handleSaveSettings = async (
+    e?: React.FormEvent,
+    customSettings?: StoreSettings
+  ) => {
+    if (e) e.preventDefault();
+    const targetSettings = customSettings || storeSettings;
+    if (
+      !targetSettings.codEnabled &&
+      !targetSettings.upiEnabled &&
+      !targetSettings.razorpayEnabled
+    ) {
       setBanner({
         type: 'error',
         message: 'Please keep at least one payment method (COD, UPI QR, or Razorpay) enabled.',
@@ -213,12 +225,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsSavingSettings(true);
     try {
-      const saved = await saveStoreSettings(storeSettings);
+      const saved = await saveStoreSettings(targetSettings);
       setStoreSettings(saved);
       setBanner({
         type: 'success',
         message:
-          'Store settings saved to Firebase Firestore and updated live across the storefront!',
+          activeTab === 'slideshow'
+            ? 'Hero slideshow saved to Firebase Firestore and updated live on the homepage!'
+            : activeTab === 'customization'
+            ? 'Store customization saved to Firebase Firestore and applied live across the storefront!'
+            : 'Store settings saved to Firebase Firestore and updated live across the storefront!',
       });
       setTimeout(() => setBanner(null), 4000);
     } catch (err: unknown) {
@@ -338,15 +354,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       >
         {/* HEADER BAR */}
         <div
-          className="p-4 sm:p-5 border-b flex items-center justify-between"
+          className="p-3.5 sm:p-5 border-b flex flex-wrap items-center justify-between gap-2.5 min-w-0"
           style={{
             backgroundColor: 'var(--surface-elevated)',
             borderColor: 'var(--border)',
           }}
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div
-              className="p-2 rounded-lg border"
+              className="p-2 rounded-lg border shrink-0"
               style={{
                 backgroundColor: 'var(--surface)',
                 borderColor: 'var(--border)',
@@ -355,8 +371,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <ShieldCheck className="w-5 h-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <span
                   className="text-[10px] tracking-widest uppercase font-semibold"
                   style={{ color: 'var(--accent)' }}
@@ -377,7 +393,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <h2
                 id="admin-title"
-                className="font-serif text-2xl font-semibold leading-tight"
+                className="font-serif text-xl sm:text-2xl font-semibold leading-tight truncate"
                 style={{ color: 'var(--text-main)' }}
               >
                 Merchant Workspace
@@ -385,7 +401,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto">
             {isAuthenticated && (
               <>
                 <button
@@ -414,14 +430,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+                  className="px-2.5 sm:px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
                   style={{
                     backgroundColor: 'var(--error-bg)',
                     borderColor: 'var(--error-border)',
                     color: 'var(--error-text)',
                   }}
                 >
-                  <LogOut className="w-3.5 h-3.5" />
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
                   <span>Logout</span>
                 </button>
               </>
@@ -430,7 +446,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               type="button"
               onClick={onClose}
               aria-label="Close merchant dashboard"
-              className="w-9 h-9 rounded-lg border flex items-center justify-center ml-1 cursor-pointer"
+              className="w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer shrink-0"
               style={{
                 backgroundColor: 'var(--surface)',
                 borderColor: 'var(--border)',
@@ -690,13 +706,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               {/* Clean Store Management Tabs */}
               <div
-                className="flex border-b gap-2 overflow-x-auto pb-1"
+                className="flex flex-wrap border-b gap-1.5 pb-1"
                 style={{ borderColor: 'var(--border)' }}
               >
                 {[
                   { id: 'overview', label: 'Overview' },
                   { id: 'inventory', label: `Products (${products.length})` },
                   { id: 'orders', label: `Orders (${orders.length})` },
+                  { id: 'customization', label: 'Store Customization' },
+                  {
+                    id: 'slideshow',
+                    label: `Hero Slideshow (${
+                      (storeSettings.heroSlides || []).filter((s) => s.enabled).length
+                    })`,
+                  },
                   { id: 'settings', label: 'Store Settings' },
                 ].map((tab) => {
                   const active = activeTab === tab.id;
@@ -705,7 +728,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       key={tab.id}
                       type="button"
                       onClick={() => setActiveTab(tab.id as any)}
-                      className="px-4 py-2.5 rounded-t-lg text-xs font-semibold tracking-wider transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-2.5 rounded-t-lg text-xs font-semibold tracking-wider transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer"
                       style={{
                         backgroundColor: active ? 'var(--primary)' : 'transparent',
                         color: active ? 'var(--btn-text)' : 'var(--text-muted)',
@@ -2229,6 +2252,64 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           }}
                         />
                       </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-free-shipping-threshold"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Free Shipping Threshold (₹ INR)
+                        </label>
+                        <input
+                          id="setting-free-shipping-threshold"
+                          type="number"
+                          min={0}
+                          step={50}
+                          value={storeSettings.freeShippingThreshold ?? 1999}
+                          onChange={(e) =>
+                            setStoreSettings({
+                              ...storeSettings,
+                              freeShippingThreshold: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="setting-standard-shipping-fee"
+                          className="block text-xs font-semibold uppercase mb-1"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          Standard Shipping Fee Below Threshold (₹ INR)
+                        </label>
+                        <input
+                          id="setting-standard-shipping-fee"
+                          type="number"
+                          min={0}
+                          step={10}
+                          value={storeSettings.standardShippingFee ?? 99}
+                          onChange={(e) =>
+                            setStoreSettings({
+                              ...storeSettings,
+                              standardShippingFee: Math.max(0, Number(e.target.value) || 0),
+                            })
+                          }
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -2383,7 +2464,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-end gap-3 pt-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('customization')}
+                        className="px-4 py-2.5 rounded-lg border text-xs font-semibold cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--primary)',
+                        }}
+                      >
+                        Open Store Customization →
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('slideshow')}
+                        className="px-4 py-2.5 rounded-lg border text-xs font-semibold cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--primary)',
+                        }}
+                      >
+                        Configure Hero Slideshow →
+                      </button>
+                    </div>
                     <button
                       type="submit"
                       disabled={isSavingSettings}
@@ -2397,6 +2504,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   </div>
                 </form>
+              )}
+
+              {/* TAB 5: STORE CUSTOMIZATION */}
+              {activeTab === 'customization' && (
+                <StoreCustomization
+                  storeSettings={storeSettings}
+                  isSaving={isSavingSettings}
+                  onChangeSettings={setStoreSettings}
+                  onSaveSettings={handleSaveSettings}
+                  onSelectPresetTheme={(themeId) =>
+                    onThemePreviewChange?.(
+                      themeId,
+                      storeSettings.defaultAppearance || 'system'
+                    )
+                  }
+                  onBanner={(b) => {
+                    setBanner(b);
+                    setTimeout(() => setBanner(null), 4000);
+                  }}
+                />
+              )}
+
+              {/* TAB 6: HERO SLIDESHOW MANAGEMENT */}
+              {activeTab === 'slideshow' && (
+                <HeroSlideshowManager
+                  storeSettings={storeSettings}
+                  isSaving={isSavingSettings}
+                  onChangeSettings={setStoreSettings}
+                  onSaveSettings={handleSaveSettings}
+                  onBanner={(b) => {
+                    setBanner(b);
+                    setTimeout(() => setBanner(null), 4000);
+                  }}
+                />
               )}
             </div>
           )}

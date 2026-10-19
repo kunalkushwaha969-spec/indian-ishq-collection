@@ -68,6 +68,12 @@
         "upiVpa": { "type": "string" },
         "razorpayEnabled": { "type": "boolean" },
         "razorpayKeyId": { "type": "string" },
+        "heroSlides": {
+          "type": "array",
+          "description": "Ordered list of configurable hero slideshow banners with image URL, title, subtitle, CTA, and enabled state"
+        },
+        "heroAutoplay": { "type": "boolean" },
+        "heroIntervalMs": { "type": "number" },
         "updatedAt": { "type": "string" }
       },
       "required": ["storeName", "phone", "email"]

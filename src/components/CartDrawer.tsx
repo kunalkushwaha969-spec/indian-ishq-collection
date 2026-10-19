@@ -1,13 +1,14 @@
-import React, { useEffect } from 'react';
-import type { CartItem, Product } from '../utils/ecommerce';
+import React from 'react';
+import type { CartItem, Product, StoreSettings } from '../utils/ecommerce';
 import { calculateCartSummary, formatINR } from '../utils/ecommerce';
-import { ShoppingBag, X, Plus, Minus, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { X, ShoppingBag, Trash2, Plus, Minus, Truck, ShieldCheck } from 'lucide-react';
 
 interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   cart: CartItem[];
   products: Product[];
+  storeSettings?: StoreSettings;
   onUpdateQty: (productId: string, delta: number) => void;
   onRemoveItem: (productId: string) => void;
   onProceedToCheckout: () => void;
@@ -18,42 +19,38 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onClose,
   cart,
   products,
+  storeSettings,
   onUpdateQty,
   onRemoveItem,
   onProceedToCheckout,
 }) => {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
   if (!isOpen) return null;
 
-  const { subtotal, itemCount, shipping, total, freeShippingQualified, freeShippingThreshold } =
-    calculateCartSummary(cart, products);
-
-  const productMap = new Map<string, Product>();
-  products.forEach((p) => productMap.set(p.id, p));
-
-  const amountNeededForFreeShipping = Math.max(0, freeShippingThreshold - subtotal);
+  const summary = calculateCartSummary(
+    cart,
+    products,
+    storeSettings?.freeShippingThreshold,
+    storeSettings?.standardShippingFee
+  );
+  const amountRemainingForFree = Math.max(0, summary.freeShippingThreshold - summary.subtotal);
+  const progressPct =
+    summary.freeShippingThreshold > 0
+      ? Math.min(100, Math.round((summary.subtotal / summary.freeShippingThreshold) * 100))
+      : 100;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="cart-heading"
-      className="fixed inset-0 z-50 flex justify-end"
+      aria-labelledby="cart-drawer-title"
+      className="fixed inset-0 z-50 flex justify-end transition-opacity overflow-x-hidden"
       style={{ backgroundColor: 'var(--overlay)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-md h-full shadow-2xl flex flex-col overflow-hidden border-l transition-colors"
+        className="w-full max-w-md h-full flex flex-col justify-between shadow-2xl border-l transition-colors min-w-0"
         style={{
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',
@@ -62,29 +59,37 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-6 py-4 border-b"
+          className="px-4 sm:px-5 py-4 border-b flex items-center justify-between gap-2"
           style={{
-            backgroundColor: 'var(--surface)',
+            backgroundColor: 'var(--surface-elevated)',
             borderColor: 'var(--border)',
           }}
         >
-          <div className="flex items-center gap-2.5">
-            <ShoppingBag className="w-5 h-5" style={{ color: 'var(--primary)' }} />
-            <h2
-              id="cart-heading"
-              className="font-serif text-2xl font-semibold"
-              style={{ color: 'var(--text-main)' }}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <ShoppingBag className="w-5 h-5 shrink-0" style={{ color: 'var(--primary)' }} />
+            <h3
+              id="cart-drawer-title"
+              className="font-serif text-xl sm:text-2xl font-semibold truncate"
             >
-              Your Shopping Bag ({itemCount})
-            </h2>
+              Your Shopping Bag
+            </h3>
+            <span
+              className="text-xs px-2 py-0.5 rounded-full font-bold shrink-0"
+              style={{
+                backgroundColor: 'var(--primary)',
+                color: 'var(--btn-text)',
+              }}
+            >
+              {summary.itemCount}
+            </span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close cart"
-            className="w-9 h-9 rounded-lg border flex items-center justify-center transition-colors cursor-pointer"
+            aria-label="Close shopping bag"
+            className="w-9 h-9 rounded-lg border flex items-center justify-center transition cursor-pointer shrink-0"
             style={{
-              backgroundColor: 'var(--surface-elevated)',
+              backgroundColor: 'var(--surface)',
               borderColor: 'var(--border)',
               color: 'var(--text-main)',
             }}
@@ -93,106 +98,133 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           </button>
         </div>
 
-        {/* Free Shipping Progress */}
-        <div
-          className="px-6 py-3 border-b text-xs"
-          style={{
-            backgroundColor: freeShippingQualified && subtotal > 0 ? 'var(--success-bg)' : 'var(--surface-elevated)',
-            borderColor: 'var(--border)',
-            color: freeShippingQualified && subtotal > 0 ? 'var(--success-text)' : 'var(--text-secondary)',
-          }}
-        >
-          {freeShippingQualified && subtotal > 0 ? (
-            <p className="font-semibold flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>Complimentary Express Delivery unlocked!</span>
-            </p>
-          ) : (
-            <p>
-              Add <strong className="tabular-nums">{formatINR(amountNeededForFreeShipping)}</strong> more
-              to unlock <strong>Complimentary Shipping</strong> (orders above ₹1,999)
-            </p>
-          )}
-        </div>
-
-        {/* Cart Contents */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {cart.length === 0 ? (
-            <div className="text-center py-20 space-y-3">
+        {/* Free Shipping Progress Bar */}
+        {cart.length > 0 && summary.freeShippingThreshold > 0 && (
+          <div
+            className="px-4 sm:px-5 py-3 border-b"
+            style={{
+              backgroundColor: 'var(--surface-elevated)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div className="flex items-center gap-2 text-xs font-medium mb-1.5">
+              <Truck className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
+              {summary.freeShippingQualified ? (
+                <span className="font-semibold" style={{ color: 'var(--success-text)' }}>
+                  Congratulations! Your order qualifies for FREE Express Delivery
+                </span>
+              ) : (
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  Add{' '}
+                  <strong style={{ color: 'var(--primary)' }}>
+                    {formatINR(amountRemainingForFree)}
+                  </strong>{' '}
+                  more for{' '}
+                  <strong style={{ color: 'var(--success-text)' }}>FREE Express Delivery</strong>
+                </span>
+              )}
+            </div>
+            <div
+              className="w-full h-1.5 rounded-full overflow-hidden"
+              style={{ backgroundColor: 'var(--border)' }}
+            >
               <div
-                className="w-14 h-14 rounded-full mx-auto flex items-center justify-center border"
+                className="h-full transition-all duration-500 rounded-full"
+                style={{
+                  width: `${progressPct}%`,
+                  backgroundColor: summary.freeShippingQualified
+                    ? 'var(--success-text)'
+                    : 'var(--primary)',
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3 min-w-0">
+          {cart.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-center py-12">
+              <div
+                className="w-16 h-16 rounded-full flex items-center justify-center mb-3 border"
                 style={{
                   backgroundColor: 'var(--surface-elevated)',
                   borderColor: 'var(--border)',
                   color: 'var(--primary)',
                 }}
               >
-                <ShoppingBag className="w-6 h-6" />
+                <ShoppingBag className="w-7 h-7 opacity-60" />
               </div>
-              <p className="font-serif text-2xl" style={{ color: 'var(--text-main)' }}>
-                Your bag is waiting for something lovely.
-              </p>
-              <p className="text-xs max-w-xs mx-auto" style={{ color: 'var(--text-muted)' }}>
-                Explore our handcrafted kurtis, festive silhouettes, and Banarasi Katan silk sarees.
+              <p className="font-serif text-xl font-semibold">Your bag is currently empty</p>
+              <p className="text-xs mt-1 max-w-xs" style={{ color: 'var(--text-muted)' }}>
+                Explore our handcrafted sarees, bridal lehengas, and festive silhouettes to start
+                building your collection.
               </p>
               <button
                 type="button"
                 onClick={onClose}
-                className="mt-4 px-6 py-2.5 rounded-lg text-xs font-semibold tracking-wider uppercase cursor-pointer"
+                className="mt-5 px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer"
                 style={{
                   backgroundColor: 'var(--primary)',
                   color: 'var(--btn-text)',
                 }}
               >
-                Explore Collection
+                Browse Collection
               </button>
             </div>
           ) : (
-            <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-              {cart.map((item) => {
-                const prod = productMap.get(item.id);
-                if (!prod) return null;
-
-                return (
-                  <div
-                    key={item.id}
-                    className="py-4 flex gap-4 items-center"
+            cart.map((item) => {
+              const prod = products.find((p) => p.id === item.id);
+              if (!prod) return null;
+              const maxStock = prod.stock;
+              return (
+                <div
+                  key={item.id}
+                  className="flex gap-3 p-3 rounded-xl border shadow-2xs transition min-w-0"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
+                  <img
+                    src={prod.image_url}
+                    alt={prod.name}
+                    referrerPolicy="no-referrer"
+                    className="w-20 h-24 rounded-lg object-cover border shrink-0"
                     style={{ borderColor: 'var(--border)' }}
-                  >
-                    <img
-                      src={prod.image_url}
-                      alt={prod.name}
-                      referrerPolicy="no-referrer"
-                      className="w-16 h-20 object-cover rounded-lg shrink-0 border"
-                      style={{
-                        backgroundColor: 'var(--surface-elevated)',
-                        borderColor: 'var(--border)',
-                      }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <h4
-                        className="font-serif text-base font-semibold truncate"
-                        style={{ color: 'var(--text-main)' }}
+                  />
+                  <div className="flex-1 flex flex-col justify-between min-w-0">
+                    <div>
+                      <div className="flex justify-between items-start gap-2">
+                        <h4 className="font-serif text-base font-semibold leading-snug truncate">
+                          {prod.name}
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => onRemoveItem(item.id)}
+                          aria-label={`Remove ${prod.name} from bag`}
+                          className="p-1 transition cursor-pointer shrink-0"
+                          style={{ color: 'var(--text-muted)' }}
+                          title="Remove item"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div
+                        className="flex items-center gap-2 mt-0.5 text-[11px]"
+                        style={{ color: 'var(--text-muted)' }}
                       >
-                        {prod.name}
-                      </h4>
-                      <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        {prod.category}
-                      </p>
-                      <p
-                        className="text-sm font-bold mt-1 tabular-nums"
-                        style={{ color: 'var(--primary)' }}
-                      >
-                        {formatINR(prod.price)}
-                      </p>
+                        <span>{prod.category}</span>
+                        <span>•</span>
+                        <span>{formatINR(prod.price)} each</span>
+                      </div>
                     </div>
 
-                    {/* Quantity Stepper & Remove */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between mt-2 gap-2">
                       <div
                         className="flex items-center border rounded-lg overflow-hidden"
                         style={{
-                          backgroundColor: 'var(--input-bg)',
+                          backgroundColor: 'var(--surface)',
                           borderColor: 'var(--border)',
                         }}
                       >
@@ -200,96 +232,90 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           type="button"
                           onClick={() => onUpdateQty(item.id, -1)}
                           aria-label={`Decrease quantity of ${prod.name}`}
-                          className="w-8 h-8 flex items-center justify-center transition-colors cursor-pointer"
+                          className="w-7 h-7 flex items-center justify-center transition cursor-pointer"
                           style={{ color: 'var(--text-main)' }}
                         >
-                          <Minus className="w-3.5 h-3.5" />
+                          <Minus className="w-3 h-3" />
                         </button>
-                        <span
-                          className="w-8 text-center text-xs font-semibold tabular-nums"
-                          style={{ color: 'var(--text-main)' }}
-                        >
+                        <span className="w-8 text-center text-xs font-semibold tabular-nums">
                           {item.qty}
                         </span>
                         <button
                           type="button"
+                          disabled={item.qty >= maxStock}
                           onClick={() => onUpdateQty(item.id, 1)}
                           aria-label={`Increase quantity of ${prod.name}`}
-                          className="w-8 h-8 flex items-center justify-center transition-colors cursor-pointer"
+                          className="w-7 h-7 flex items-center justify-center transition disabled:opacity-40 cursor-pointer"
                           style={{ color: 'var(--text-main)' }}
                         >
-                          <Plus className="w-3.5 h-3.5" />
+                          <Plus className="w-3 h-3" />
                         </button>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => onRemoveItem(item.id)}
-                        aria-label={`Remove ${prod.name} from cart`}
-                        className="p-1.5 rounded-lg transition-colors cursor-pointer"
-                        style={{ color: 'var(--text-muted)' }}
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                      <strong className="text-sm font-bold tabular-nums" style={{ color: 'var(--primary)' }}>
+                        {formatINR(prod.price * item.qty)}
+                      </strong>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })
           )}
         </div>
 
-        {/* Footer Summary */}
+        {/* Footer */}
         {cart.length > 0 && (
           <div
-            className="p-6 border-t space-y-4"
+            className="p-4 sm:p-5 border-t space-y-3"
             style={{
               backgroundColor: 'var(--surface-elevated)',
               borderColor: 'var(--border)',
             }}
           >
-            <div className="space-y-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-                <span className="font-semibold tabular-nums" style={{ color: 'var(--text-main)' }}>
-                  {formatINR(subtotal)}
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}>
+                <span>Bag Subtotal ({summary.itemCount} items)</span>
+                <span className="font-medium tabular-nums" style={{ color: 'var(--text-main)' }}>
+                  {formatINR(summary.subtotal)}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span>Shipping</span>
-                <span className="tabular-nums">
-                  {shipping === 0 ? (
-                    <span className="font-semibold uppercase" style={{ color: 'var(--success-text)' }}>
-                      Complimentary
+              <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}>
+                <span>Shipping & Handling</span>
+                <span className="font-medium">
+                  {summary.shipping === 0 ? (
+                    <span className="font-semibold" style={{ color: 'var(--success-text)' }}>
+                      FREE
                     </span>
                   ) : (
-                    formatINR(shipping)
+                    <span className="tabular-nums" style={{ color: 'var(--text-main)' }}>
+                      {formatINR(summary.shipping)}
+                    </span>
                   )}
                 </span>
               </div>
               <div
-                className="flex justify-between text-base font-bold pt-2.5 border-t tabular-nums"
+                className="border-t pt-2 flex justify-between items-baseline text-base font-bold"
                 style={{
                   borderColor: 'var(--border)',
                   color: 'var(--primary)',
                 }}
               >
-                <span style={{ color: 'var(--text-main)' }}>Total Payable</span>
-                <span>{formatINR(total)}</span>
+                <span>Total Amount</span>
+                <span className="text-lg tabular-nums">{formatINR(summary.total)}</span>
               </div>
             </div>
 
             <button
               type="button"
               onClick={onProceedToCheckout}
-              className="w-full py-3.5 px-5 rounded-lg text-xs font-semibold tracking-widest uppercase transition-opacity hover:opacity-95 flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+              className="w-full py-3.5 rounded-lg text-xs font-semibold uppercase tracking-widest shadow-md hover:opacity-95 transition cursor-pointer flex items-center justify-center gap-2"
               style={{
                 backgroundColor: 'var(--primary)',
                 color: 'var(--btn-text)',
               }}
             >
-              <span>Proceed to Checkout</span>
-              <ArrowRight className="w-4 h-4" />
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>Proceed to Secure Checkout</span>
             </button>
           </div>
         )}

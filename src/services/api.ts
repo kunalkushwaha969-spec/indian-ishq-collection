@@ -508,10 +508,54 @@ export async function uploadImageDirect(file: File): Promise<string> {
   if (file.size > 10 * 1024 * 1024) {
     throw new Error('Image size must be under 10MB');
   }
-  return await new Promise<string>((resolve, reject) => {
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error('Failed to read image file data'));
     reader.readAsDataURL(file);
   });
+
+  // Optimize large images in browser via canvas so multiple slideshow uploads fit in Firestore (1MB limit)
+  if (typeof document !== 'undefined' && typeof Image !== 'undefined' && file.size > 180 * 1024) {
+    try {
+      const compressed = await new Promise<string>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxDim = 1400;
+            let width = img.naturalWidth || img.width;
+            let height = img.naturalHeight || img.height;
+            if (width > maxDim || height > maxDim) {
+              if (width >= height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(rawDataUrl);
+              return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.82));
+          } catch {
+            resolve(rawDataUrl);
+          }
+        };
+        img.onerror = () => resolve(rawDataUrl);
+        img.src = rawDataUrl;
+      });
+      return compressed;
+    } catch {
+      return rawDataUrl;
+    }
+  }
+
+  return rawDataUrl;
 }

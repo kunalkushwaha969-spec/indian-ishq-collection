@@ -177,14 +177,22 @@ export default function App() {
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
 
+  const effectiveManualAppearance: 'light' | 'dark' | null =
+    manualAppearance !== null
+      ? manualAppearance
+      : storeSettings.defaultAppearance === 'light' ||
+        storeSettings.defaultAppearance === 'dark'
+      ? storeSettings.defaultAppearance
+      : null;
+
   const appearanceMode: AppearanceMode = resolveAppearanceMode(
-    manualAppearance,
+    effectiveManualAppearance,
     systemPrefersDark
   );
 
-  // Apply theme tokens and appearance mode to <html> immediately whenever either changes
+  // Apply theme tokens, appearance mode, and merchant customization overrides to <html>
   useEffect(() => {
-    applyThemeToDocument(activeTheme, appearanceMode);
+    applyThemeToDocument(activeTheme, appearanceMode, storeSettings);
     try {
       localStorage.setItem(THEME_STORAGE_KEY, activeTheme.id);
       localStorage.setItem(
@@ -200,7 +208,7 @@ export default function App() {
         })
       );
     } catch {}
-  }, [activeTheme, appearanceMode]);
+  }, [activeTheme, appearanceMode, storeSettings]);
 
   const handleToggleAppearance = useCallback(() => {
     const nextMode: AppearanceMode = appearanceMode === 'dark' ? 'light' : 'dark';
@@ -220,6 +228,19 @@ export default function App() {
       }
     } catch {}
   }, []);
+
+  const handleMerchantThemePreviewChange = useCallback(
+    (themeId: string, mode: 'light' | 'dark' | 'system') => {
+      const nextTheme = resolveThemeById(themeId);
+      setActiveTheme(nextTheme);
+      if (mode === 'system') {
+        handleSetManualAppearance(null);
+      } else {
+        handleSetManualAppearance(mode);
+      }
+    },
+    [handleSetManualAppearance]
+  );
 
   // Cover Photo State
   const [coverPhoto, setCoverPhoto] = useState<string>(() => {
@@ -804,6 +825,7 @@ export default function App() {
         onClose={() => setIsCartOpen(false)}
         cart={cart}
         products={products}
+        storeSettings={storeSettings}
         onUpdateQty={handleUpdateQty}
         onRemoveItem={handleRemoveItem}
         onProceedToCheckout={() => {
@@ -831,6 +853,7 @@ export default function App() {
         }}
         onCatalogChanged={loadLiveProducts}
         onAuthChange={handleMerchantAuthChange}
+        onThemePreviewChange={handleMerchantThemePreviewChange}
       />
 
       <Toast toast={toast} onClose={() => setToast(null)} />
