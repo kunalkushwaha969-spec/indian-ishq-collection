@@ -1,37 +1,37 @@
 import React, { useState } from 'react';
 import {
   type StoreSettings,
-  type HomepageSectionConfig,
-  type StoreTestimonial,
+  type HeroSlide,
   DEFAULT_STORE_SETTINGS,
-  DEFAULT_CUSTOM_COLORS,
-  DEFAULT_HOMEPAGE_SECTIONS,
-  DEFAULT_PROMO_BANNER,
-  DEFAULT_TESTIMONIALS,
-  sanitizeHomepageSections,
-  reorderHomepageSections,
+  DEFAULT_HERO_SLIDES,
+  sanitizeHeroSlides,
+  reorderHeroSlides,
 } from '../utils/ecommerce';
-import { COORDINATED_THEMES, resolveThemeById } from '../utils/themes';
-import { uploadImageDirect } from '../services/api';
-import { HeroSlideshowManager } from './HeroSlideshowManager';
 import {
+  COORDINATED_THEMES,
+  resolveThemeById,
+  applyThemeToDocument,
+} from '../utils/themes';
+import { uploadImageDirect } from '../services/api';
+import {
+  Image as ImageIcon,
   Palette,
-  Layout,
-  Sparkles,
-  ShoppingBag,
-  PanelBottom,
-  ArrowUp,
-  ArrowDown,
-  Eye,
-  EyeOff,
-  CheckCircle2,
-  RotateCcw,
-  Upload,
+  Store,
   Plus,
   Trash2,
-  Type,
-  Check,
-  ShieldCheck,
+  ArrowUp,
+  ArrowDown,
+  Upload,
+  CheckCircle2,
+  RotateCcw,
+  Sun,
+  Moon,
+  Monitor,
+  Play,
+  Pause,
+  AlertTriangle,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 interface StoreCustomizationProps {
@@ -39,741 +39,1025 @@ interface StoreCustomizationProps {
   isSaving: boolean;
   onChangeSettings: (updated: StoreSettings) => void;
   onSaveSettings: (e?: React.FormEvent, customSettings?: StoreSettings) => Promise<void>;
-  onSelectPresetTheme?: (themeId: string) => void;
+  onCancelChanges?: () => void;
+  onSelectPresetTheme?: (themeId: string, mode?: 'light' | 'dark' | 'system') => void;
   onBanner: (banner: { type: 'success' | 'error' | 'info'; message: string }) => void;
 }
 
-type CustomizationSubTab = 'brand' | 'layout' | 'slideshow' | 'catalog' | 'headerFooter';
+type CustomizeAreaId = 'homepage' | 'appearance' | 'info';
+
+const DESTINATION_OPTIONS = [
+  { value: 'All', label: 'All Outfits (Full Shop)' },
+  { value: 'Kurtis', label: 'Kurtis Collection' },
+  { value: 'Sarees', label: 'Sarees Collection' },
+  { value: 'Suits', label: 'Suit Sets Collection' },
+  { value: 'Festive', label: 'Festive Wear Collection' },
+];
 
 export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
   storeSettings,
   isSaving,
   onChangeSettings,
   onSaveSettings,
+  onCancelChanges,
   onSelectPresetTheme,
   onBanner,
 }) => {
-  const [subTab, setSubTab] = useState<CustomizationSubTab>('brand');
-  const [uploadingAsset, setUploadingAsset] = useState<string | null>(null);
-  const [newTestimonial, setNewTestimonial] = useState<{
-    customerName: string;
-    location: string;
-    quote: string;
-    productBought: string;
-    rating: number;
+  const [activeArea, setActiveArea] = useState<CustomizeAreaId>('homepage');
+  const [previewSlideIndex, setPreviewSlideIndex] = useState<number>(0);
+  const [uploadingSlideId, setUploadingSlideId] = useState<string | null>(null);
+  const [isAddingSlide, setIsAddingSlide] = useState<boolean>(false);
+  const [confirmDeleteSlideId, setConfirmDeleteSlideId] = useState<string | null>(null);
+  const [confirmResetTheme, setConfirmResetTheme] = useState<boolean>(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState<boolean>(false);
+
+  const [newSlideDraft, setNewSlideDraft] = useState<{
+    imageUrl: string;
+    title: string;
+    subtitle: string;
+    ctaText: string;
+    categoryFilter: string;
   }>({
-    customerName: '',
-    location: '',
-    quote: '',
-    productBought: '',
-    rating: 5,
+    imageUrl: '',
+    title: '',
+    subtitle: '',
+    ctaText: 'Shop Collection',
+    categoryFilter: 'All',
   });
 
-  const sections = sanitizeHomepageSections(
-    storeSettings.homepageSections,
-    DEFAULT_HOMEPAGE_SECTIONS
-  );
-  const customColors = storeSettings.customColors || DEFAULT_CUSTOM_COLORS;
-  const promoBanner = storeSettings.promoBanner || DEFAULT_PROMO_BANNER;
-  const testimonials = storeSettings.testimonials || DEFAULT_TESTIMONIALS;
+  const slides = sanitizeHeroSlides(storeSettings.heroSlides, DEFAULT_HERO_SLIDES);
+  const enabledSlides = slides.filter((s) => s.enabled);
+  const safePreviewSlide =
+    enabledSlides[previewSlideIndex % Math.max(1, enabledSlides.length)] ||
+    slides[0] ||
+    DEFAULT_HERO_SLIDES[0];
 
-  const handleAssetUpload = async (
-    target: 'logo' | 'favicon' | 'promo',
+  const activeThemeObj = resolveThemeById(storeSettings.themeId || 'burgundy');
+  const currentAppearance = storeSettings.defaultAppearance || 'light';
+
+  const updateField = <K extends keyof StoreSettings>(key: K, value: StoreSettings[K]) => {
+    onChangeSettings({
+      ...storeSettings,
+      [key]: value,
+    });
+  };
+
+  // --- AREA A: HOMEPAGE SLIDESHOW HANDLERS ---
+  const updateSlides = (nextSlides: HeroSlide[]) => {
+    const normalized = nextSlides.map((s, idx) => ({
+      ...s,
+      order: idx,
+      overlayOpacity: typeof s.overlayOpacity === 'number' ? s.overlayOpacity : 65,
+    }));
+    onChangeSettings({
+      ...storeSettings,
+      heroSlides: normalized,
+    });
+  };
+
+  const handleSlideChange = (
+    slideId: string,
+    field: keyof HeroSlide,
+    value: string | boolean | number
+  ) => {
+    const next = slides.map((s) => {
+      if (s.id !== slideId) return s;
+      const updated = { ...s, [field]: value };
+      if (field === 'categoryFilter') {
+        updated.ctaLink = '#shop';
+      }
+      return updated;
+    });
+    updateSlides(next);
+  };
+
+  const handleMoveSlide = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    const reordered = reorderHeroSlides(slides, index, targetIndex);
+    updateSlides(reordered);
+  };
+
+  const handleRemoveSlideConfirmed = (slideId: string) => {
+    if (slides.length <= 1) {
+      onBanner({
+        type: 'error',
+        message: 'Your homepage needs at least one cover slide.',
+      });
+      setConfirmDeleteSlideId(null);
+      return;
+    }
+    const remaining = slides.filter((s) => s.id !== slideId);
+    if (!remaining.some((s) => s.enabled) && remaining.length > 0) {
+      remaining[0].enabled = true;
+    }
+    updateSlides(remaining);
+    setConfirmDeleteSlideId(null);
+    onBanner({
+      type: 'info',
+      message: 'Slide removed. Tap "Save Changes" to update your store.',
+    });
+  };
+
+  const handleSlideImageUpload = async (
+    slideId: string,
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploadingAsset(target);
+    setUploadingSlideId(slideId);
     try {
-      const dataUrl = await uploadImageDirect(file);
-      if (target === 'logo') {
-        onChangeSettings({ ...storeSettings, logoUrl: dataUrl });
-      } else if (target === 'favicon') {
-        onChangeSettings({ ...storeSettings, faviconUrl: dataUrl });
-      } else if (target === 'promo') {
-        onChangeSettings({
-          ...storeSettings,
-          promoBanner: { ...promoBanner, imageUrl: dataUrl },
-        });
+      const uploadedUrl = await uploadImageDirect(file);
+      if (slideId === 'new-slide') {
+        setNewSlideDraft((prev) => ({ ...prev, imageUrl: uploadedUrl }));
+      } else {
+        handleSlideChange(slideId, 'imageUrl', uploadedUrl);
       }
       onBanner({
-        type: 'info',
-        message: 'Image uploaded! Click "Save Customization" to publish changes.',
+        type: 'success',
+        message: 'Cover photo uploaded! Tap "Save Changes" to publish.',
       });
-    } catch (err: unknown) {
+    } catch {
       onBanner({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to upload image.',
+        message: 'Could not upload photo. Please try a smaller image.',
       });
     } finally {
-      setUploadingAsset(null);
+      setUploadingSlideId(null);
+      e.target.value = '';
     }
   };
 
-  const handleMoveSection = (index: number, direction: 'up' | 'down') => {
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    const nextSections = reorderHomepageSections(sections, index, targetIndex);
-    onChangeSettings({
-      ...storeSettings,
-      homepageSections: nextSections,
-    });
-  };
-
-  const handleToggleSection = (sectionId: HomepageSectionConfig['id']) => {
-    const enabledCount = sections.filter((s) => s.enabled).length;
-    const targetSec = sections.find((s) => s.id === sectionId);
-    if (targetSec?.enabled && enabledCount <= 1) {
+  const handleAddSlide = () => {
+    if (!newSlideDraft.imageUrl.trim()) {
       onBanner({
         type: 'error',
-        message: 'At least one homepage section must remain visible.',
+        message: 'Please upload a photo or paste an image link for the new slide.',
       });
       return;
     }
-    const nextSections = sections.map((s) =>
-      s.id === sectionId ? { ...s, enabled: !s.enabled } : s
-    );
-    onChangeSettings({
-      ...storeSettings,
-      homepageSections: nextSections,
-    });
-  };
-
-  const handleResetSections = () => {
-    onChangeSettings({
-      ...storeSettings,
-      homepageSections: DEFAULT_HOMEPAGE_SECTIONS.map((s, idx) => ({ ...s, order: idx })),
-    });
-    onBanner({
-      type: 'info',
-      message: 'Restored default homepage section order. Click "Save Customization" to apply.',
-    });
-  };
-
-  const handleAddTestimonial = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTestimonial.customerName.trim() || !newTestimonial.quote.trim()) {
+    if (!newSlideDraft.title.trim()) {
       onBanner({
         type: 'error',
-        message: 'Please enter both the customer name and their review quote.',
+        message: 'Please enter a heading for the new slide.',
       });
       return;
     }
-    const created: StoreTestimonial = {
-      id: `test-${Date.now()}`,
-      customerName: newTestimonial.customerName.trim(),
-      location: newTestimonial.location.trim() || 'India',
-      quote: newTestimonial.quote.trim(),
-      productBought: newTestimonial.productBought.trim(),
-      rating: newTestimonial.rating || 5,
+
+    const created: HeroSlide = {
+      id: `slide-${Date.now()}`,
+      imageUrl: newSlideDraft.imageUrl.trim(),
+      badge: 'Featured Collection',
+      title: newSlideDraft.title.trim(),
+      subtitle:
+        newSlideDraft.subtitle.trim() ||
+        'Handcrafted Indian silhouettes woven with artisanal detail.',
+      ctaText: newSlideDraft.ctaText.trim() || 'Shop Collection',
+      ctaLink: '#shop',
+      categoryFilter: newSlideDraft.categoryFilter || 'All',
+      enabled: true,
+      order: slides.length,
+      overlayOpacity: 65,
     };
-    onChangeSettings({
-      ...storeSettings,
-      testimonials: [...testimonials, created],
+
+    updateSlides([...slides, created]);
+    setNewSlideDraft({
+      imageUrl: '',
+      title: '',
+      subtitle: '',
+      ctaText: 'Shop Collection',
+      categoryFilter: 'All',
     });
-    setNewTestimonial({
-      customerName: '',
-      location: '',
-      quote: '',
-      productBought: '',
-      rating: 5,
-    });
+    setIsAddingSlide(false);
     onBanner({
       type: 'success',
-      message: 'Customer testimonial added! Enable the Testimonials section above and click Save.',
+      message: 'New slide added! Tap "Save Changes" to publish it to your homepage.',
     });
   };
 
-  const handleDeleteTestimonial = (id: string) => {
-    onChangeSettings({
+  // --- AREA B: COLORS & APPEARANCE HANDLERS ---
+  const handleSelectThemeCard = (themeId: string) => {
+    const themeObj = resolveThemeById(themeId);
+    const nextSettings: StoreSettings = {
       ...storeSettings,
-      testimonials: testimonials.filter((t) => t.id !== id),
+      themeId: themeObj.id,
+      customColorsEnabled: false,
+    };
+    onChangeSettings(nextSettings);
+    onSelectPresetTheme?.(themeObj.id, nextSettings.defaultAppearance || 'light');
+
+    const effectiveMode =
+      nextSettings.defaultAppearance === 'dark' ? 'dark' : 'light';
+    applyThemeToDocument(themeObj, effectiveMode, nextSettings);
+  };
+
+  const handleSelectAppearanceMode = (mode: 'light' | 'dark' | 'system') => {
+    const nextSettings: StoreSettings = {
+      ...storeSettings,
+      defaultAppearance: mode,
+    };
+    onChangeSettings(nextSettings);
+    onSelectPresetTheme?.(activeThemeObj.id, mode);
+
+    const isDark =
+      mode === 'dark' ||
+      (mode === 'system' &&
+        typeof window !== 'undefined' &&
+        window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+    applyThemeToDocument(activeThemeObj, isDark ? 'dark' : 'light', nextSettings);
+  };
+
+  const handleResetThemeToDefault = async () => {
+    const defaultTheme = resolveThemeById('burgundy');
+    const resetSettings: StoreSettings = {
+      ...storeSettings,
+      themeId: 'burgundy',
+      defaultAppearance: 'light',
+      customColorsEnabled: false,
+      headingFont: 'Cormorant Garamond',
+      bodyFont: 'Plus Jakarta Sans',
+      headingScale: 'standard',
+      bodyScale: 'standard',
+      borderRadiusStyle: 'rounded',
+      buttonStyle: 'solid',
+    };
+    onChangeSettings(resetSettings);
+    onSelectPresetTheme?.('burgundy', 'light');
+    applyThemeToDocument(defaultTheme, 'light', resetSettings);
+    setConfirmResetTheme(false);
+    await onSaveSettings(undefined, resetSettings);
+    onBanner({
+      type: 'success',
+      message: 'Colors & appearance reset to Default (Elegant Burgundy · Light Mode).',
     });
   };
 
-  const activePreset = resolveThemeById(storeSettings.themeId);
-  const previewPrimary = storeSettings.customColorsEnabled
-    ? customColors.primary
-    : activePreset.light.primary;
-  const previewAccent = storeSettings.customColorsEnabled
-    ? customColors.accent
-    : activePreset.light.accent;
-  const previewBg = storeSettings.customColorsEnabled ? customColors.bg : activePreset.light.bg;
-  const previewSurface = storeSettings.customColorsEnabled
-    ? customColors.surface
-    : activePreset.light.surface;
-  const previewText = storeSettings.customColorsEnabled
-    ? customColors.textMain
-    : activePreset.light.textMain;
-  const previewBtnBg = storeSettings.customColorsEnabled
-    ? customColors.buttonBg
-    : activePreset.light.primary;
-  const previewBtnText = storeSettings.customColorsEnabled
-    ? customColors.buttonText
-    : activePreset.light.btnText;
-  const previewBorder = storeSettings.customColorsEnabled
-    ? customColors.border
-    : activePreset.light.border;
+  // --- AREA C: LOGO UPLOAD HANDLER ---
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingLogo(true);
+    try {
+      const uploaded = await uploadImageDirect(file);
+      updateField('logoUrl', uploaded);
+      onBanner({
+        type: 'success',
+        message: 'Store logo uploaded! Tap "Save Changes" below.',
+      });
+    } catch {
+      onBanner({
+        type: 'error',
+        message: 'Could not upload logo image. Please try another file.',
+      });
+    } finally {
+      setIsUploadingLogo(false);
+      e.target.value = '';
+    }
+  };
 
-  const previewRadius =
-    storeSettings.borderRadiusStyle === 'sharp'
-      ? '0px'
-      : storeSettings.borderRadiusStyle === 'subtle'
-      ? '6px'
-      : storeSettings.borderRadiusStyle === 'pill'
-      ? '20px'
-      : '12px';
-
-  const previewBtnRadius =
-    storeSettings.buttonStyle === 'pill' || storeSettings.borderRadiusStyle === 'pill'
-      ? '9999px'
-      : storeSettings.borderRadiusStyle === 'sharp'
-      ? '0px'
-      : '8px';
+  const AREAS: {
+    id: CustomizeAreaId;
+    label: string;
+    shortDesc: string;
+    icon: React.ReactNode;
+  }[] = [
+    {
+      id: 'homepage',
+      label: 'Homepage',
+      shortDesc: 'Hero cover photos, headings & buttons',
+      icon: <ImageIcon className="w-4 h-4" />,
+    },
+    {
+      id: 'appearance',
+      label: 'Colors & Appearance',
+      shortDesc: '6 boutique color themes & light/dark mode',
+      icon: <Palette className="w-4 h-4" />,
+    },
+    {
+      id: 'info',
+      label: 'Store Information',
+      shortDesc: 'Name, logo, WhatsApp, address & policies',
+      icon: <Store className="w-4 h-4" />,
+    },
+  ];
 
   return (
-    <div className="space-y-6 min-w-0 max-w-full overflow-hidden">
-      {/* Top Header & Sub-Navigation Bar */}
+    <div className="space-y-6 min-w-0">
+      {/* Header & 3 Simple Customization Areas Switcher */}
       <div
-        className="p-4 sm:p-6 rounded-xl border space-y-4 min-w-0"
+        className="p-4 sm:p-5 rounded-xl border space-y-4"
         style={{
-          backgroundColor: 'var(--surface)',
+          backgroundColor: 'var(--surface-elevated)',
           borderColor: 'var(--border)',
         }}
       >
-        <div
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4"
-          style={{ borderColor: 'var(--border)' }}
-        >
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <Palette className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
-              <span
-                className="text-[11px] font-semibold uppercase tracking-widest"
-                style={{ color: 'var(--accent)' }}
-              >
-                No-Code Storefront Studio
-              </span>
-            </div>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
             <h3
-              className="font-serif text-xl sm:text-2xl font-bold mt-0.5"
+              className="font-serif text-xl sm:text-2xl font-semibold"
               style={{ color: 'var(--text-main)' }}
             >
-              Store Customization & Layout Studio
+              Customize Your Store
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Customize brand identity, colors, typography, homepage section ordering, hero
-              slideshow, and catalog display rules without editing source code.
+              Choose what you want to update below, then tap Save Changes.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                onChangeSettings({ ...DEFAULT_STORE_SETTINGS });
-                onBanner({
-                  type: 'info',
-                  message:
-                    'Loaded default Indian Ishq Collection customization. Click "Save Customization" to publish.',
-                });
-              }}
-              className="px-3.5 py-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-              style={{
-                backgroundColor: 'var(--surface-elevated)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset All</span>
-            </button>
-
+          <div className="flex items-center gap-2 shrink-0">
+            {onCancelChanges && (
+              <button
+                type="button"
+                onClick={onCancelChanges}
+                className="px-4 py-2.5 rounded-lg border text-xs font-semibold cursor-pointer transition-colors"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Cancel
+              </button>
+            )}
             <button
               type="button"
               disabled={isSaving}
-              onClick={() => onSaveSettings()}
-              className="px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+              onClick={() => onSaveSettings(undefined, storeSettings)}
+              className="px-5 py-2.5 rounded-lg text-xs font-semibold tracking-wider uppercase cursor-pointer disabled:opacity-50 shadow-sm"
               style={{
                 backgroundColor: 'var(--primary)',
                 color: 'var(--btn-text)',
               }}
             >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{isSaving ? 'Saving...' : 'Save Customization'}</span>
+              {isSaving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
         </div>
 
-        {/* 5 Organized Sub-Section Pills */}
-        <div
-          className="flex flex-wrap items-center gap-2"
-          role="tablist"
-          aria-label="Store customization sections"
-        >
-          {[
-            { id: 'brand', label: 'A. Brand, Colors & Fonts', icon: Palette },
-            { id: 'layout', label: 'B. Homepage Layout & Sections', icon: Layout },
-            { id: 'slideshow', label: 'C. Hero Slideshow', icon: Sparkles },
-            { id: 'catalog', label: 'D. Product & Catalog Display', icon: ShoppingBag },
-            { id: 'headerFooter', label: 'E. Header & Footer Controls', icon: PanelBottom },
-          ].map((item) => {
-            const Icon = item.icon;
-            const active = subTab === item.id;
+        {/* 3 Area Selector Cards (Easy to tap on mobile phone) */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          {AREAS.map((area) => {
+            const active = activeArea === area.id;
             return (
               <button
-                key={item.id}
+                key={area.id}
                 type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setSubTab(item.id as CustomizationSubTab)}
-                className="px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                onClick={() => setActiveArea(area.id)}
+                className="p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3"
                 style={{
-                  backgroundColor: active ? 'var(--primary)' : 'var(--surface-elevated)',
-                  color: active ? 'var(--btn-text)' : 'var(--text-main)',
+                  backgroundColor: active ? 'var(--primary)' : 'var(--surface)',
                   borderColor: active ? 'var(--primary)' : 'var(--border)',
+                  color: active ? 'var(--btn-text)' : 'var(--text-main)',
                 }}
               >
-                <Icon className="w-3.5 h-3.5 shrink-0" />
-                <span>{item.label}</span>
+                <div
+                  className="p-2 rounded-lg shrink-0 mt-0.5"
+                  style={{
+                    backgroundColor: active ? 'rgba(255,255,255,0.18)' : 'var(--surface-elevated)',
+                    color: active ? 'var(--btn-text)' : 'var(--primary)',
+                  }}
+                >
+                  {area.icon}
+                </div>
+                <div className="min-w-0">
+                  <span className="block text-sm font-semibold truncate">{area.label}</span>
+                  <span
+                    className="block text-[11px] leading-snug mt-0.5"
+                    style={{
+                      color: active ? 'rgba(255,255,255,0.85)' : 'var(--text-muted)',
+                    }}
+                  >
+                    {area.shortDesc}
+                  </span>
+                </div>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* =====================================================================
-          SUB-SECTION A: BRAND IDENTITY, COLORS, TYPOGRAPHY & LIVE PREVIEW
-         ===================================================================== */}
-      {subTab === 'brand' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start min-w-0">
-          {/* Left 7 Cols: Controls */}
-          <div className="lg:col-span-7 space-y-6 min-w-0">
-            {/* 1. Brand Identity, Logo & Favicon */}
-            <div
-              className="p-5 rounded-xl border space-y-4 min-w-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <h4
-                className="font-serif text-lg font-semibold"
-                style={{ color: 'var(--text-main)' }}
-              >
-                1. Brand Identity, Logo & Favicon
-              </h4>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="min-w-0">
-                  <label
-                    htmlFor="cust-store-name"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Store / Brand Name
-                  </label>
-                  <input
-                    id="cust-store-name"
-                    type="text"
-                    value={storeSettings.storeName}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, storeName: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div className="min-w-0">
-                  <label
-                    htmlFor="cust-tagline"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Brand Tagline
-                  </label>
-                  <input
-                    id="cust-tagline"
-                    type="text"
-                    value={storeSettings.tagline}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, tagline: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="min-w-0">
-                <label
-                  htmlFor="cust-brand-desc"
-                  className="block text-xs font-semibold uppercase mb-1"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Brand Description
-                </label>
-                <textarea
-                  id="cust-brand-desc"
-                  rows={2}
-                  value={storeSettings.brandDescription}
-                  onChange={(e) =>
-                    onChangeSettings({ ...storeSettings, brandDescription: e.target.value })
-                  }
-                  className="w-full min-w-0 p-2.5 border rounded-lg text-xs leading-relaxed"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
-              </div>
-
-              {/* Logo Upload & Favicon Upload */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
-                <div className="space-y-2 min-w-0">
-                  <label
-                    htmlFor="cust-logo-url"
-                    className="block text-xs font-semibold uppercase"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Brand Logo (Header & Footer)
-                  </label>
-                  <input
-                    id="cust-logo-url"
-                    type="url"
-                    value={storeSettings.logoUrl.startsWith('data:') ? '' : storeSettings.logoUrl}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, logoUrl: e.target.value })
-                    }
-                    placeholder="https://... or upload below"
-                    className="w-full min-w-0 p-2 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                  <div className="flex items-center gap-2">
-                    <label
-                      htmlFor="cust-logo-upload"
-                      className="flex-1 p-2 border rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                      style={{
-                        backgroundColor: 'var(--surface-elevated)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      <Upload className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--primary)' }} />
-                      <span className="truncate">
-                        {uploadingAsset === 'logo' ? 'Uploading...' : 'Upload Logo'}
-                      </span>
-                      <input
-                        id="cust-logo-upload"
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleAssetUpload('logo', e)}
-                        className="sr-only"
-                      />
-                    </label>
-                    {storeSettings.logoUrl && (
-                      <button
-                        type="button"
-                        onClick={() => onChangeSettings({ ...storeSettings, logoUrl: '' })}
-                        className="px-2.5 py-2 rounded-lg border text-xs cursor-pointer"
-                        style={{
-                          backgroundColor: 'var(--error-bg)',
-                          borderColor: 'var(--error-border)',
-                          color: 'var(--error-text)',
-                        }}
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-2 min-w-0">
-                  <label
-                    htmlFor="cust-favicon-url"
-                    className="block text-xs font-semibold uppercase"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Browser Tab Favicon (Optional)
-                  </label>
-                  <input
-                    id="cust-favicon-url"
-                    type="url"
-                    value={
-                      storeSettings.faviconUrl?.startsWith('data:')
-                        ? ''
-                        : storeSettings.faviconUrl || ''
-                    }
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, faviconUrl: e.target.value })
-                    }
-                    placeholder="https://... or upload icon"
-                    className="w-full min-w-0 p-2 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                  <div className="flex items-center gap-2">
-                    <label
-                      htmlFor="cust-favicon-upload"
-                      className="flex-1 p-2 border rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                      style={{
-                        backgroundColor: 'var(--surface-elevated)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      <Upload className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--primary)' }} />
-                      <span className="truncate">
-                        {uploadingAsset === 'favicon' ? 'Uploading...' : 'Upload Favicon'}
-                      </span>
-                      <input
-                        id="cust-favicon-upload"
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleAssetUpload('favicon', e)}
-                        className="sr-only"
-                      />
-                    </label>
-                    {storeSettings.faviconUrl && (
-                      <button
-                        type="button"
-                        onClick={() => onChangeSettings({ ...storeSettings, faviconUrl: '' })}
-                        className="px-2.5 py-2 rounded-lg border text-xs cursor-pointer"
-                        style={{
-                          backgroundColor: 'var(--error-bg)',
-                          borderColor: 'var(--error-border)',
-                          color: 'var(--error-text)',
-                        }}
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 2. Theme Palette Presets & Custom Color Tokens */}
-            <div
-              className="p-5 rounded-xl border space-y-4 min-w-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
+      {/* ===================================================================== */}
+      {/* AREA A: HOMEPAGE (Hero Cover Images, Headings, Slideshow Mode & CTA)  */}
+      {/* ===================================================================== */}
+      {activeArea === 'homepage' && (
+        <div className="space-y-6">
+          {/* 1. Live Homepage Banner Preview */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-3"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
                 <h4
                   className="font-serif text-lg font-semibold"
                   style={{ color: 'var(--text-main)' }}
                 >
-                  2. Curated Theme Palettes & Custom Colors
+                  Homepage Cover Preview
                 </h4>
-                <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Applies across all pages & modals
-                </span>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  This is how your main banner looks at the top of the website.
+                </p>
               </div>
-
-              {/* 6 Curated Palette Swatches */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                {COORDINATED_THEMES.map((theme) => {
-                  const selected = storeSettings.themeId === theme.id;
-                  return (
+              {enabledSlides.length > 1 && (
+                <div className="flex items-center gap-1.5">
+                  {enabledSlides.map((s, idx) => (
                     <button
-                      key={theme.id}
+                      key={s.id}
                       type="button"
-                      onClick={() => {
-                        onChangeSettings({
-                          ...storeSettings,
-                          themeId: theme.id,
-                          customColors: {
-                            primary: theme.light.primary,
-                            accent: theme.light.accent,
-                            bg: theme.light.bg,
-                            surface: theme.light.surface,
-                            textMain: theme.light.textMain,
-                            buttonBg: theme.light.primary,
-                            buttonText: theme.light.btnText,
-                            border: theme.light.border,
-                          },
-                        });
-                        onSelectPresetTheme?.(theme.id);
-                      }}
-                      className="p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 min-w-0"
+                      onClick={() => setPreviewSlideIndex(idx)}
+                      className="px-2.5 py-1 rounded text-xs font-semibold border cursor-pointer"
                       style={{
-                        backgroundColor: selected ? 'var(--surface-elevated)' : 'var(--surface)',
-                        borderColor: selected ? 'var(--primary)' : 'var(--border)',
+                        backgroundColor:
+                          previewSlideIndex % enabledSlides.length === idx
+                            ? 'var(--primary)'
+                            : 'var(--surface-elevated)',
+                        color:
+                          previewSlideIndex % enabledSlides.length === idx
+                            ? 'var(--btn-text)'
+                            : 'var(--text-main)',
+                        borderColor: 'var(--border)',
                       }}
                     >
-                      <div className="flex items-center justify-between gap-1">
-                        <span
-                          className="text-xs font-semibold truncate"
-                          style={{ color: 'var(--text-main)' }}
-                        >
-                          {theme.name}
-                        </span>
-                        {selected && (
-                          <Check className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--primary)' }} />
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="w-4 h-4 rounded-full border border-black/15"
-                          style={{ backgroundColor: theme.swatches.primary }}
-                        />
-                        <span
-                          className="w-4 h-4 rounded-full border border-black/15"
-                          style={{ backgroundColor: theme.swatches.accent }}
-                        />
-                        <span
-                          className="w-4 h-4 rounded-full border border-black/15"
-                          style={{ backgroundColor: theme.swatches.secondary }}
-                        />
-                        <span
-                          className="w-4 h-4 rounded-full border border-black/15"
-                          style={{ backgroundColor: theme.swatches.bg }}
-                        />
-                      </div>
+                      Slide {idx + 1}
                     </button>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-              {/* Default Appearance Mode */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
-                <div>
-                  <label
-                    htmlFor="cust-appearance-mode"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Default Theme Mode for Visitors
-                  </label>
-                  <select
-                    id="cust-appearance-mode"
-                    value={storeSettings.defaultAppearance || 'system'}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        defaultAppearance: e.target.value as 'system' | 'light' | 'dark',
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
+            {/* Visual Preview Box */}
+            <div className="relative w-full h-56 sm:h-64 rounded-xl overflow-hidden border bg-neutral-900">
+              <img
+                src={safePreviewSlide.imageUrl}
+                alt={safePreviewSlide.title}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover object-center"
+              />
+              <div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    'linear-gradient(to top, rgba(15,10,12,0.82) 0%, rgba(15,10,12,0.4) 55%, rgba(15,10,12,0.15) 100%)',
+                }}
+              />
+              <div className="absolute inset-0 p-5 sm:p-6 flex flex-col justify-end text-white max-w-xl">
+                {safePreviewSlide.badge && (
+                  <span className="text-[11px] uppercase tracking-widest text-amber-200 font-semibold mb-1">
+                    {safePreviewSlide.badge}
+                  </span>
+                )}
+                <h5 className="font-serif text-xl sm:text-2xl font-semibold leading-tight">
+                  {safePreviewSlide.title || 'Your Slide Heading'}
+                </h5>
+                <p className="text-xs sm:text-sm text-white/90 mt-1 line-clamp-2">
+                  {safePreviewSlide.subtitle || 'Your short description appears here.'}
+                </p>
+                <div className="mt-3">
+                  <span
+                    className="inline-block px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider"
                     style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
                     }}
                   >
-                    <option value="system">Auto (Match Visitor Device Light/Dark)</option>
-                    <option value="light">Light Mode Default</option>
-                    <option value="dark">Dark Mode Default</option>
-                  </select>
-                </div>
-
-                <div className="flex items-end">
-                  <label
-                    className="w-full p-2.5 rounded-lg border flex items-center gap-2.5 cursor-pointer"
-                    style={{
-                      backgroundColor: 'var(--surface-elevated)',
-                      borderColor: storeSettings.customColorsEnabled
-                        ? 'var(--primary)'
-                        : 'var(--border)',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={storeSettings.customColorsEnabled}
-                      onChange={(e) =>
-                        onChangeSettings({
-                          ...storeSettings,
-                          customColorsEnabled: e.target.checked,
-                        })
-                      }
-                      className="accent-current w-4 h-4"
-                    />
-                    <span className="text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
-                      Enable Custom Hex Color Overrides
-                    </span>
-                  </label>
+                    {safePreviewSlide.ctaText || 'Shop Collection'} →
+                  </span>
                 </div>
               </div>
+            </div>
+          </div>
 
-              {/* Fine-Grained Color Pickers */}
-              {storeSettings.customColorsEnabled && (
+          {/* 2. Automatic vs Manual Slideshow Mode */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-3"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div>
+              <h4
+                className="font-serif text-lg font-semibold"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Slideshow Movement
+              </h4>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Choose whether slides change automatically or only when the customer taps next.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  onChangeSettings({
+                    ...storeSettings,
+                    heroAutoplay: true,
+                    heroIntervalMs: 5000,
+                  })
+                }
+                className="p-3.5 rounded-xl border text-left flex items-center gap-3 cursor-pointer"
+                style={{
+                  backgroundColor:
+                    storeSettings.heroAutoplay !== false
+                      ? 'var(--surface-elevated)'
+                      : 'var(--surface)',
+                  borderColor:
+                    storeSettings.heroAutoplay !== false ? 'var(--primary)' : 'var(--border)',
+                }}
+              >
                 <div
-                  className="p-4 rounded-xl border grid grid-cols-2 sm:grid-cols-4 gap-3"
+                  className="p-2.5 rounded-lg shrink-0"
                   style={{
-                    backgroundColor: 'var(--surface-elevated)',
-                    borderColor: 'var(--border)',
+                    backgroundColor:
+                      storeSettings.heroAutoplay !== false ? 'var(--primary)' : 'var(--surface-elevated)',
+                    color:
+                      storeSettings.heroAutoplay !== false ? 'var(--btn-text)' : 'var(--text-muted)',
                   }}
                 >
-                  {(
-                    [
-                      { key: 'primary', label: 'Brand / Primary' },
-                      { key: 'accent', label: 'Accent / Gold' },
-                      { key: 'bg', label: 'Page Background' },
-                      { key: 'surface', label: 'Card Surface' },
-                      { key: 'textMain', label: 'Primary Text' },
-                      { key: 'buttonBg', label: 'Button Fill' },
-                      { key: 'buttonText', label: 'Button Text' },
-                      { key: 'border', label: 'Card Border' },
-                    ] as const
-                  ).map((item) => (
-                    <div key={item.key} className="min-w-0">
+                  <Play className="w-4 h-4" />
+                </div>
+                <div>
+                  <span
+                    className="block text-xs font-semibold"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    Automatic Slideshow (Recommended)
+                  </span>
+                  <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Smoothly changes slides every 5 seconds
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onChangeSettings({
+                    ...storeSettings,
+                    heroAutoplay: false,
+                  })
+                }
+                className="p-3.5 rounded-xl border text-left flex items-center gap-3 cursor-pointer"
+                style={{
+                  backgroundColor:
+                    storeSettings.heroAutoplay === false
+                      ? 'var(--surface-elevated)'
+                      : 'var(--surface)',
+                  borderColor:
+                    storeSettings.heroAutoplay === false ? 'var(--primary)' : 'var(--border)',
+                }}
+              >
+                <div
+                  className="p-2.5 rounded-lg shrink-0"
+                  style={{
+                    backgroundColor:
+                      storeSettings.heroAutoplay === false ? 'var(--primary)' : 'var(--surface-elevated)',
+                    color:
+                      storeSettings.heroAutoplay === false ? 'var(--btn-text)' : 'var(--text-muted)',
+                  }}
+                >
+                  <Pause className="w-4 h-4" />
+                </div>
+                <div>
+                  <span
+                    className="block text-xs font-semibold"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    Manual Slideshow
+                  </span>
+                  <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Changes only when customer swipes or taps arrows
+                  </span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* 3. Manage Hero Slides */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4
+                  className="font-serif text-lg font-semibold"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Homepage Hero Slides ({slides.length})
+                </h4>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Change cover photos, edit headings, reorder slides, or add a new slide.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsAddingSlide(!isAddingSlide)}
+                className="px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                style={{
+                  backgroundColor: 'var(--primary)',
+                  color: 'var(--btn-text)',
+                }}
+              >
+                <Plus className="w-4 h-4" />
+                <span>{isAddingSlide ? 'Close New Slide Form' : 'Add New Slide'}</span>
+              </button>
+            </div>
+
+            {/* Add New Slide Box */}
+            {isAddingSlide && (
+              <div
+                className="p-4 sm:p-5 rounded-xl border-2 space-y-4"
+                style={{
+                  backgroundColor: 'var(--surface-elevated)',
+                  borderColor: 'var(--primary)',
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <h5
+                    className="font-serif text-base font-semibold"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    Add New Homepage Slide
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingSlide(false)}
+                    className="text-xs underline cursor-pointer"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="sm:col-span-2 space-y-2">
+                    <label className="block text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
+                      1. Cover Image *
+                    </label>
+                    <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
                       <label
-                        htmlFor={`color-${item.key}`}
-                        className="block text-[11px] font-semibold uppercase mb-1 truncate"
-                        style={{ color: 'var(--text-muted)' }}
+                        className="px-4 py-2.5 rounded-lg border text-xs font-semibold flex items-center gap-2 cursor-pointer shrink-0"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                          borderColor: 'var(--primary)',
+                        }}
                       >
-                        {item.label}
-                      </label>
-                      <div className="flex items-center gap-1.5">
+                        <Upload className="w-4 h-4" />
+                        <span>
+                          {uploadingSlideId === 'new-slide'
+                            ? 'Uploading...'
+                            : 'Upload Photo from Phone / Device'}
+                        </span>
                         <input
-                          id={`color-${item.key}`}
-                          type="color"
-                          value={customColors[item.key]}
-                          onChange={(e) =>
-                            onChangeSettings({
-                              ...storeSettings,
-                              customColors: {
-                                ...customColors,
-                                [item.key]: e.target.value,
-                              },
-                            })
-                          }
-                          className="w-8 h-8 rounded border cursor-pointer shrink-0 p-0.5 bg-transparent"
-                          style={{ borderColor: 'var(--border)' }}
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleSlideImageUpload('new-slide', e)}
+                          className="hidden"
                         />
+                      </label>
+                      <input
+                        type="url"
+                        value={
+                          newSlideDraft.imageUrl.startsWith('data:')
+                            ? ''
+                            : newSlideDraft.imageUrl
+                        }
+                        onChange={(e) =>
+                          setNewSlideDraft((prev) => ({ ...prev, imageUrl: e.target.value }))
+                        }
+                        placeholder="Or paste an image link (https://...)"
+                        className="flex-1 w-full p-2.5 rounded-lg border text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-main)' }}>
+                      2. Slide Heading *
+                    </label>
+                    <input
+                      type="text"
+                      value={newSlideDraft.title}
+                      onChange={(e) =>
+                        setNewSlideDraft((prev) => ({ ...prev, title: e.target.value }))
+                      }
+                      placeholder="e.g. Festive Silk & Chanderi Edit"
+                      className="w-full p-2.5 rounded-lg border text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-main)' }}>
+                      3. Short Description
+                    </label>
+                    <input
+                      type="text"
+                      value={newSlideDraft.subtitle}
+                      onChange={(e) =>
+                        setNewSlideDraft((prev) => ({ ...prev, subtitle: e.target.value }))
+                      }
+                      placeholder="e.g. Handpicked ethnic wear for weddings and celebrations."
+                      className="w-full p-2.5 rounded-lg border text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-main)' }}>
+                      4. Shopping Button Text
+                    </label>
+                    <input
+                      type="text"
+                      value={newSlideDraft.ctaText}
+                      onChange={(e) =>
+                        setNewSlideDraft((prev) => ({ ...prev, ctaText: e.target.value }))
+                      }
+                      placeholder="e.g. Shop Collection"
+                      className="w-full p-2.5 rounded-lg border text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--text-main)' }}>
+                      5. Where Button Takes Customer
+                    </label>
+                    <select
+                      value={newSlideDraft.categoryFilter}
+                      onChange={(e) =>
+                        setNewSlideDraft((prev) => ({
+                          ...prev,
+                          categoryFilter: e.target.value,
+                        }))
+                      }
+                      className="w-full p-2.5 rounded-lg border text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    >
+                      {DESTINATION_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingSlide(false)}
+                    className="px-4 py-2 rounded-lg border text-xs font-semibold cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddSlide}
+                    className="px-5 py-2 rounded-lg text-xs font-semibold cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
+                    }}
+                  >
+                    Add Slide to Homepage
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Existing Slides List */}
+            <div className="space-y-4">
+              {slides.map((slide, index) => (
+                <div
+                  key={slide.id}
+                  className="p-4 sm:p-5 rounded-xl border space-y-4"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: slide.enabled ? 'var(--border)' : 'var(--warning-border)',
+                    opacity: slide.enabled ? 1 : 0.78,
+                  }}
+                >
+                  {/* Slide Top Bar: Number, Move Up/Down, Show/Hide, Remove */}
+                  <div
+                    className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b"
+                    style={{ borderColor: 'var(--border)' }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="px-2.5 py-1 rounded-md text-xs font-bold"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        Slide {index + 1}
+                      </span>
+                      <span
+                        className="text-xs font-semibold truncate max-w-[180px] sm:max-w-xs"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        {slide.title || 'Untitled Slide'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        onClick={() => handleMoveSlide(index, 'up')}
+                        aria-label={`Move Slide ${index + 1} up`}
+                        className="px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                        <span>Up</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={index === slides.length - 1}
+                        onClick={() => handleMoveSlide(index, 'down')}
+                        aria-label={`Move Slide ${index + 1} down`}
+                        className="px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                        <span>Down</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSlideChange(slide.id, 'enabled', !slide.enabled)}
+                        className="px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 cursor-pointer"
+                        style={{
+                          backgroundColor: slide.enabled
+                            ? 'var(--success-bg)'
+                            : 'var(--surface-elevated)',
+                          borderColor: slide.enabled
+                            ? 'var(--success-border)'
+                            : 'var(--border)',
+                          color: slide.enabled ? 'var(--success-text)' : 'var(--text-muted)',
+                        }}
+                      >
+                        {slide.enabled ? (
+                          <>
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Visible</span>
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5" />
+                            <span>Hidden</span>
+                          </>
+                        )}
+                      </button>
+
+                      {confirmDeleteSlideId === slide.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSlideConfirmed(slide.id)}
+                            className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Confirm Remove
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteSlideId(null)}
+                            className="px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-main)',
+                            }}
+                          >
+                            Keep
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteSlideId(slide.id)}
+                          aria-label={`Remove Slide ${index + 1}`}
+                          className="px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 cursor-pointer"
+                          style={{
+                            backgroundColor: 'var(--error-bg)',
+                            borderColor: 'var(--error-border)',
+                            color: 'var(--error-text)',
+                          }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Slide Content Form */}
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+                    {/* Cover Photo Thumbnail + Change Photo Button */}
+                    <div className="md:col-span-4 space-y-2">
+                      <div
+                        className="relative w-full h-36 rounded-lg overflow-hidden border bg-neutral-100"
+                        style={{ borderColor: 'var(--border)' }}
+                      >
+                        <img
+                          src={slide.imageUrl}
+                          alt={slide.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+
+                      <label
+                        className="w-full py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--primary)',
+                        }}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>
+                          {uploadingSlideId === slide.id ? 'Uploading...' : 'Change Cover Photo'}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleSlideImageUpload(slide.id, e)}
+                          className="hidden"
+                        />
+                      </label>
+
+                      <input
+                        type="url"
+                        aria-label={`Slide ${index + 1} image link`}
+                        value={slide.imageUrl.startsWith('data:') ? '' : slide.imageUrl}
+                        onChange={(e) => handleSlideChange(slide.id, 'imageUrl', e.target.value)}
+                        placeholder="Or paste image link..."
+                        className="w-full p-2 rounded-lg border text-[11px]"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    {/* Slide Heading, Description & Button Controls */}
+                    <div className="md:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      <div className="sm:col-span-2">
+                        <label
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Slide Heading
+                        </label>
                         <input
                           type="text"
-                          value={customColors[item.key]}
-                          aria-label={`${item.label} hex code`}
-                          onChange={(e) =>
-                            onChangeSettings({
-                              ...storeSettings,
-                              customColors: {
-                                ...customColors,
-                                [item.key]: e.target.value,
-                              },
-                            })
-                          }
-                          className="w-full min-w-0 p-1.5 border rounded text-[11px] font-mono"
+                          value={slide.title}
+                          onChange={(e) => handleSlideChange(slide.id, 'title', e.target.value)}
+                          placeholder="e.g. Handcrafted Indian Silhouettes"
+                          className="w-full p-2.5 rounded-lg border text-xs"
                           style={{
                             backgroundColor: 'var(--input-bg)',
                             borderColor: 'var(--border)',
@@ -781,1256 +1065,437 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
                           }}
                         />
                       </div>
+
+                      <div className="sm:col-span-2">
+                        <label
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Slide Description
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={slide.subtitle}
+                          onChange={(e) => handleSlideChange(slide.id, 'subtitle', e.target.value)}
+                          placeholder="Short description shown under the heading"
+                          className="w-full p-2.5 rounded-lg border text-xs leading-relaxed"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Shopping Button Text
+                        </label>
+                        <input
+                          type="text"
+                          value={slide.ctaText}
+                          onChange={(e) => handleSlideChange(slide.id, 'ctaText', e.target.value)}
+                          placeholder="e.g. Explore Kurtis"
+                          className="w-full p-2.5 rounded-lg border text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Button Destination
+                        </label>
+                        <select
+                          value={slide.categoryFilter || 'All'}
+                          onChange={(e) =>
+                            handleSlideChange(slide.id, 'categoryFilter', e.target.value)
+                          }
+                          className="w-full p-2.5 rounded-lg border text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        >
+                          {DESTINATION_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  ))}
+                  </div>
                 </div>
-              )}
-            </div>
-
-            {/* 3. Typography, Font Sizes, Border Radius & Button Styles */}
-            <div
-              className="p-5 rounded-xl border space-y-4 min-w-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <Type className="w-4 h-4" style={{ color: 'var(--primary)' }} />
-                <h4
-                  className="font-serif text-lg font-semibold"
-                  style={{ color: 'var(--text-main)' }}
-                >
-                  3. Typography, Border Radius & Button Styles
-                </h4>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="cust-heading-font"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Heading Font Family
-                  </label>
-                  <select
-                    id="cust-heading-font"
-                    value={storeSettings.headingFont}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        headingFont: e.target.value as StoreSettings['headingFont'],
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    <option value="Cormorant Garamond">Cormorant Garamond (Editorial Serif)</option>
-                    <option value="Playfair Display">Playfair Display (Luxury Couture Serif)</option>
-                    <option value="Georgia">Georgia (Classic Heritage Serif)</option>
-                    <option value="Plus Jakarta Sans">Plus Jakarta Sans (Modern Clean Sans)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-body-font"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Body Font Family
-                  </label>
-                  <select
-                    id="cust-body-font"
-                    value={storeSettings.bodyFont}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        bodyFont: e.target.value as StoreSettings['bodyFont'],
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    <option value="Plus Jakarta Sans">Plus Jakarta Sans (Modern Geometric)</option>
-                    <option value="Noto Sans">Noto Sans (Crisp Humanist Sans)</option>
-                    <option value="System UI">System UI (Native Fast Sans)</option>
-                    <option value="Georgia">Georgia (Classic Editorial Serif)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-heading-scale"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Heading Font Size Scale
-                  </label>
-                  <select
-                    id="cust-heading-scale"
-                    value={storeSettings.headingScale}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        headingScale: e.target.value as StoreSettings['headingScale'],
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    <option value="compact">Compact & Refined</option>
-                    <option value="standard">Standard Editorial (Recommended)</option>
-                    <option value="large">Large & Dramatic</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-body-scale"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Body Text Size Scale
-                  </label>
-                  <select
-                    id="cust-body-scale"
-                    value={storeSettings.bodyScale}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        bodyScale: e.target.value as StoreSettings['bodyScale'],
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    <option value="compact">Compact (14px Base)</option>
-                    <option value="standard">Standard (16px Base)</option>
-                    <option value="large">Comfortable Reading (17px Base)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-border-radius"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Card & Surface Border Radius
-                  </label>
-                  <select
-                    id="cust-border-radius"
-                    value={storeSettings.borderRadiusStyle}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        borderRadiusStyle: e.target.value as StoreSettings['borderRadiusStyle'],
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    <option value="sharp">Sharp Editorial (0px)</option>
-                    <option value="subtle">Subtle Tailored (6px)</option>
-                    <option value="rounded">Soft Boutique Rounded (12px)</option>
-                    <option value="pill">Generous Curved (20px)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-button-style"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Primary CTA Button Style
-                  </label>
-                  <select
-                    id="cust-button-style"
-                    value={storeSettings.buttonStyle}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        buttonStyle: e.target.value as StoreSettings['buttonStyle'],
-                      })
-                    }
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    <option value="solid">Solid Filled Button</option>
-                    <option value="pill">Rounded Pill Capsule</option>
-                    <option value="outline">Architectural Outline</option>
-                    <option value="soft">Soft Tinted Surface</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Right 5 Cols: Real-Time Visual Preview */}
-          <div className="lg:col-span-5 lg:sticky lg:top-6 space-y-4 min-w-0">
-            <div
-              data-testid="customization-live-preview"
-              className="p-5 rounded-xl border space-y-4 shadow-sm overflow-hidden"
-              style={{
-                backgroundColor: previewBg,
-                borderColor: previewBorder,
-                color: previewText,
-              }}
-            >
-              <div
-                className="flex items-center justify-between pb-3 border-b text-[11px] font-semibold uppercase tracking-widest"
-                style={{ borderColor: previewBorder, color: previewAccent }}
-              >
-                <span>Live Brand & Token Preview</span>
-                <span>{storeSettings.headingFont}</span>
-              </div>
-
-              {/* Simulated Store Header */}
-              <div
-                className="p-3 border flex items-center justify-between gap-2"
-                style={{
-                  backgroundColor: previewSurface,
-                  borderColor: previewBorder,
-                  borderRadius: previewRadius,
-                }}
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  {storeSettings.logoUrl && (
-                    <img
-                      src={storeSettings.logoUrl}
-                      alt="Preview logo"
-                      className="w-7 h-7 object-cover rounded shrink-0"
-                    />
-                  )}
-                  <span
-                    className="font-bold text-base truncate"
-                    style={{
-                      fontFamily: `'${storeSettings.headingFont}', Georgia, serif`,
-                      color: previewPrimary,
-                    }}
-                  >
-                    {storeSettings.storeName || 'Indian Ishq Collection'}
-                  </span>
-                </div>
-                <span
-                  className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider shrink-0"
-                  style={{
-                    backgroundColor: previewBtnBg,
-                    color: previewBtnText,
-                    borderRadius: previewBtnRadius,
-                  }}
-                >
-                  Bag (2)
-                </span>
-              </div>
-
-              {/* Simulated Editorial Card */}
-              <div
-                className="p-4 border space-y-3"
-                style={{
-                  backgroundColor: previewSurface,
-                  borderColor: previewBorder,
-                  borderRadius: previewRadius,
-                  fontFamily: `'${storeSettings.bodyFont}', sans-serif`,
-                }}
-              >
-                <span
-                  className="text-[10px] font-semibold uppercase tracking-widest block"
-                  style={{ color: previewAccent }}
-                >
-                  Festive Edit · Chanderi Silk
-                </span>
-                <h5
-                  className="text-xl font-semibold leading-snug"
-                  style={{
-                    fontFamily: `'${storeSettings.headingFont}', Georgia, serif`,
-                    color: previewText,
-                  }}
-                >
-                  {storeSettings.tagline || 'Timeless Indian silhouettes, woven with ishq.'}
-                </h5>
-                <p className="text-xs opacity-80 leading-relaxed line-clamp-2">
-                  {storeSettings.brandDescription}
-                </p>
-                <div className="pt-2 flex items-center justify-between gap-2">
-                  <span className="font-bold text-sm tabular-nums" style={{ color: previewPrimary }}>
-                    ₹1,899
-                  </span>
-                  <button
-                    type="button"
-                    className="px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{
-                      backgroundColor:
-                        storeSettings.buttonStyle === 'outline'
-                          ? 'transparent'
-                          : storeSettings.buttonStyle === 'soft'
-                          ? previewBg
-                          : previewBtnBg,
-                      color:
-                        storeSettings.buttonStyle === 'outline' ||
-                        storeSettings.buttonStyle === 'soft'
-                          ? previewPrimary
-                          : previewBtnText,
-                      border: `1px solid ${previewPrimary}`,
-                      borderRadius: previewBtnRadius,
-                    }}
-                  >
-                    Add to Bag
-                  </button>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
       )}
 
-      {/* =====================================================================
-          SUB-SECTION B: HOMEPAGE LAYOUT & SECTION MANAGER
-         ===================================================================== */}
-      {subTab === 'layout' && (
-        <div className="space-y-6 min-w-0">
-          {/* 1. Section Visibility & Ordering */}
+      {/* ===================================================================== */}
+      {/* AREA B: COLORS & APPEARANCE (6 Preset Themes + Light/Dark + Preview)  */}
+      {/* ===================================================================== */}
+      {activeArea === 'appearance' && (
+        <div className="space-y-6">
+          {/* 1. Six Preset Ethnic Boutique Themes */}
           <div
-            className="p-5 rounded-xl border space-y-4 min-w-0"
+            className="p-4 sm:p-5 rounded-xl border space-y-4"
             style={{
               backgroundColor: 'var(--surface)',
               borderColor: 'var(--border)',
             }}
           >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4
                   className="font-serif text-lg font-semibold"
                   style={{ color: 'var(--text-main)' }}
                 >
-                  1. Homepage Section Visibility & Order
+                  Choose Store Color Theme
                 </h4>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Enable, disable, or reorder sections. Essential navigation, shopping bag checkout,
-                  and legal footer links are permanently protected.
+                  Tap any theme card below to immediately update your website colors.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleResetSections}
-                className="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Restore Default Order</span>
-              </button>
-            </div>
 
-            <div className="space-y-2.5">
-              {sections.map((sec, idx) => (
-                <div
-                  key={sec.id}
-                  data-testid={`homepage-section-row-${sec.id}`}
-                  className="p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors min-w-0"
+              {confirmResetTheme ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium" style={{ color: 'var(--warning-text)' }}>
+                    Reset colors to Burgundy default?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleResetThemeToDefault}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
+                    }}
+                  >
+                    Yes, Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetTheme(false)}
+                    className="px-3 py-1.5 rounded-lg border text-xs cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetTheme(true)}
+                  className="px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
                   style={{
-                    backgroundColor: sec.enabled ? 'var(--surface-elevated)' : 'var(--surface)',
-                    borderColor: sec.enabled ? 'var(--border)' : 'var(--border)',
-                    opacity: sec.enabled ? 1 : 0.68,
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
                   }}
                 >
-                  <div className="flex items-start sm:items-center gap-3 min-w-0">
-                    <span
-                      className="w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 tabular-nums"
-                      style={{
-                        backgroundColor: sec.enabled ? 'var(--primary)' : 'var(--surface-elevated)',
-                        color: sec.enabled ? 'var(--btn-text)' : 'var(--text-muted)',
-                      }}
-                    >
-                      {idx + 1}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset to Default</span>
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {COORDINATED_THEMES.map((theme) => {
+                const isSelected = activeThemeObj.id === theme.id;
+                return (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    onClick={() => handleSelectThemeCard(theme.id)}
+                    className="p-4 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between gap-3"
+                    style={{
+                      backgroundColor: theme.swatches.bg,
+                      borderColor: isSelected ? theme.swatches.primary : '#e5ded8',
+                    }}
+                  >
+                    <div className="space-y-2 w-full">
+                      <div className="flex items-center justify-between gap-2">
                         <span
-                          className="text-xs sm:text-sm font-semibold"
-                          style={{ color: 'var(--text-main)' }}
+                          className="font-serif text-base font-bold"
+                          style={{ color: theme.light.textMain }}
                         >
-                          {sec.label}
+                          {theme.name}
                         </span>
-                        <span
-                          className="text-[10px] font-semibold uppercase tracking-wider"
-                          style={{ color: sec.enabled ? 'var(--primary)' : 'var(--text-muted)' }}
-                        >
-                          · {sec.enabled ? 'Visible on Homepage' : 'Hidden'}
-                        </span>
+                        {isSelected && (
+                          <span
+                            className="px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1"
+                            style={{
+                              backgroundColor: theme.swatches.primary,
+                              color: '#ffffff',
+                            }}
+                          >
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Active</span>
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        {sec.description}
+
+                      <p
+                        className="text-xs leading-snug"
+                        style={{ color: theme.light.textSecondary }}
+                      >
+                        {theme.description}
                       </p>
                     </div>
-                  </div>
 
-                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                    <button
-                      type="button"
-                      disabled={idx === 0}
-                      onClick={() => handleMoveSection(idx, 'up')}
-                      aria-label={`Move ${sec.label} up`}
-                      className="p-2 rounded-lg border text-xs disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
-                      style={{
-                        backgroundColor: 'var(--surface)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      <ArrowUp className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={idx === sections.length - 1}
-                      onClick={() => handleMoveSection(idx, 'down')}
-                      aria-label={`Move ${sec.label} down`}
-                      className="p-2 rounded-lg border text-xs disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
-                      style={{
-                        backgroundColor: 'var(--surface)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      <ArrowDown className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleToggleSection(sec.id)}
-                      aria-label={`${sec.enabled ? 'Hide' : 'Show'} ${sec.label}`}
-                      className="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                      style={{
-                        backgroundColor: sec.enabled ? 'var(--primary)' : 'var(--surface)',
-                        color: sec.enabled ? 'var(--btn-text)' : 'var(--text-secondary)',
-                        borderColor: sec.enabled ? 'var(--primary)' : 'var(--border)',
-                      }}
-                    >
-                      {sec.enabled ? (
-                        <>
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>Enabled</span>
-                        </>
-                      ) : (
-                        <>
-                          <EyeOff className="w-3.5 h-3.5" />
-                          <span>Disabled</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+                    {/* Visual Color Swatches + Sample Button Preview */}
+                    <div className="flex items-center justify-between pt-2 border-t border-black/10 w-full">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="w-6 h-6 rounded-full border border-black/15"
+                          style={{ backgroundColor: theme.swatches.primary }}
+                          title="Main brand color"
+                        />
+                        <span
+                          className="w-6 h-6 rounded-full border border-black/15"
+                          style={{ backgroundColor: theme.swatches.accent }}
+                          title="Gold/Accent color"
+                        />
+                        <span
+                          className="w-6 h-6 rounded-full border border-black/15"
+                          style={{ backgroundColor: theme.swatches.secondary }}
+                          title="Soft card highlight"
+                        />
+                      </div>
 
-          {/* 2. Section Headings & Promotional Banner Content */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0">
-            <div
-              className="p-5 rounded-xl border space-y-4 min-w-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <h4
-                className="font-serif text-lg font-semibold"
-                style={{ color: 'var(--text-main)' }}
-              >
-                2. Section Titles & Story Copy
-              </h4>
-
-              <div className="space-y-3">
-                <div>
-                  <label
-                    htmlFor="cust-cat-title"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Featured Categories Heading
-                  </label>
-                  <input
-                    id="cust-cat-title"
-                    type="text"
-                    value={storeSettings.categoriesTitle}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, categoriesTitle: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-best-title"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Bestsellers & Catalog Heading
-                  </label>
-                  <input
-                    id="cust-best-title"
-                    type="text"
-                    value={storeSettings.bestsellersTitle}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, bestsellersTitle: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-new-title"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    New Arrivals Section Heading
-                  </label>
-                  <input
-                    id="cust-new-title"
-                    type="text"
-                    value={storeSettings.newArrivalsTitle}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, newArrivalsTitle: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-story-quote"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Brand Story Pull-Quote
-                  </label>
-                  <input
-                    id="cust-story-quote"
-                    type="text"
-                    value={storeSettings.storyQuote}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, storyQuote: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="cust-story-heading"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Brand Story Main Heading
-                  </label>
-                  <input
-                    id="cust-story-heading"
-                    type="text"
-                    value={storeSettings.storyHeading}
-                    onChange={(e) =>
-                      onChangeSettings({ ...storeSettings, storyHeading: e.target.value })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Promotional Banner Configuration */}
-            <div
-              className="p-5 rounded-xl border space-y-4 min-w-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <h4
-                className="font-serif text-lg font-semibold"
-                style={{ color: 'var(--text-main)' }}
-              >
-                3. Promotional Campaign Banner
-              </h4>
-
-              <div className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label
-                      htmlFor="promo-badge"
-                      className="block text-xs font-semibold uppercase mb-1"
-                      style={{ color: 'var(--text-muted)' }}
-                    >
-                      Campaign Kicker
-                    </label>
-                    <input
-                      id="promo-badge"
-                      type="text"
-                      value={promoBanner.badge}
-                      onChange={(e) =>
-                        onChangeSettings({
-                          ...storeSettings,
-                          promoBanner: { ...promoBanner, badge: e.target.value },
-                        })
-                      }
-                      className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                      style={{
-                        backgroundColor: 'var(--input-bg)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="promo-cta"
-                      className="block text-xs font-semibold uppercase mb-1"
-                      style={{ color: 'var(--text-muted)' }}
-                    >
-                      CTA Button Text
-                    </label>
-                    <input
-                      id="promo-cta"
-                      type="text"
-                      value={promoBanner.ctaText}
-                      onChange={(e) =>
-                        onChangeSettings({
-                          ...storeSettings,
-                          promoBanner: { ...promoBanner, ctaText: e.target.value },
-                        })
-                      }
-                      className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                      style={{
-                        backgroundColor: 'var(--input-bg)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="promo-heading"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Promotional Heading
-                  </label>
-                  <input
-                    id="promo-heading"
-                    type="text"
-                    value={promoBanner.heading}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        promoBanner: { ...promoBanner, heading: e.target.value },
-                      })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="promo-subtext"
-                    className="block text-xs font-semibold uppercase mb-1"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    Promotional Details
-                  </label>
-                  <textarea
-                    id="promo-subtext"
-                    rows={2}
-                    value={promoBanner.subtext}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        promoBanner: { ...promoBanner, subtext: e.target.value },
-                      })
-                    }
-                    className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label
-                      htmlFor="promo-img-url"
-                      className="block text-xs font-semibold uppercase mb-1"
-                      style={{ color: 'var(--text-muted)' }}
-                    >
-                      Banner Image URL
-                    </label>
-                    <input
-                      id="promo-img-url"
-                      type="url"
-                      value={promoBanner.imageUrl.startsWith('data:') ? '' : promoBanner.imageUrl}
-                      onChange={(e) =>
-                        onChangeSettings({
-                          ...storeSettings,
-                          promoBanner: { ...promoBanner, imageUrl: e.target.value },
-                        })
-                      }
-                      className="w-full min-w-0 p-2 border rounded-lg text-xs"
-                      style={{
-                        backgroundColor: 'var(--input-bg)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <label
-                      htmlFor="promo-img-upload"
-                      className="w-full p-2 border rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                      style={{
-                        backgroundColor: 'var(--surface-elevated)',
-                        borderColor: 'var(--border)',
-                        color: 'var(--text-main)',
-                      }}
-                    >
-                      <Upload className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--primary)' }} />
-                      <span className="truncate">
-                        {uploadingAsset === 'promo' ? 'Uploading...' : 'Upload Promo Image'}
+                      <span
+                        className="px-2.5 py-1 rounded text-[10px] font-semibold"
+                        style={{
+                          backgroundColor: theme.swatches.primary,
+                          color: '#ffffff',
+                        }}
+                      >
+                        {isSelected ? 'Selected' : 'Apply Theme'}
                       </span>
-                      <input
-                        id="promo-img-upload"
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleAssetUpload('promo', e)}
-                        className="sr-only"
-                      />
-                    </label>
-                  </div>
-                </div>
-              </div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* 4. Genuine Customer Testimonials Manager */}
+          {/* 2. Light / Dark Mode Appearance */}
           <div
-            className="p-5 rounded-xl border space-y-4 min-w-0"
+            className="p-4 sm:p-5 rounded-xl border space-y-3"
             style={{
               backgroundColor: 'var(--surface)',
               borderColor: 'var(--border)',
             }}
           >
-            <h4
-              className="font-serif text-lg font-semibold"
-              style={{ color: 'var(--text-main)' }}
-            >
-              4. Customer Testimonials & Newsletter Copy
-            </h4>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="cust-news-heading"
-                  className="block text-xs font-semibold uppercase mb-1"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Newsletter Section Heading
-                </label>
-                <input
-                  id="cust-news-heading"
-                  type="text"
-                  value={storeSettings.newsletterHeading}
-                  onChange={(e) =>
-                    onChangeSettings({ ...storeSettings, newsletterHeading: e.target.value })
-                  }
-                  className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="cust-news-subtext"
-                  className="block text-xs font-semibold uppercase mb-1"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Newsletter Subtext
-                </label>
-                <input
-                  id="cust-news-subtext"
-                  type="text"
-                  value={storeSettings.newsletterSubtext}
-                  onChange={(e) =>
-                    onChangeSettings({ ...storeSettings, newsletterSubtext: e.target.value })
-                  }
-                  className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
-              </div>
+            <div>
+              <h4
+                className="font-serif text-lg font-semibold"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Light or Dark Background
+              </h4>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Choose a bright daytime look, a rich dark evening look, or match the customer&apos;s phone.
+              </p>
             </div>
 
-            {/* Existing Testimonials List */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-              {testimonials.map((t) => (
-                <div
-                  key={t.id}
-                  className="p-3.5 rounded-xl border flex flex-col justify-between gap-2 min-w-0"
-                  style={{
-                    backgroundColor: 'var(--surface-elevated)',
-                    borderColor: 'var(--border)',
-                  }}
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {[
+                {
+                  id: 'light' as const,
+                  label: 'Light Mode',
+                  desc: 'Warm, bright boutique background',
+                  icon: <Sun className="w-4 h-4" />,
+                },
+                {
+                  id: 'dark' as const,
+                  label: 'Dark Mode',
+                  desc: 'Rich, dark luxury background',
+                  icon: <Moon className="w-4 h-4" />,
+                },
+                {
+                  id: 'system' as const,
+                  label: 'Match Customer Phone',
+                  desc: 'Adjusts automatically to device',
+                  icon: <Monitor className="w-4 h-4" />,
+                },
+              ].map((opt) => {
+                const active = currentAppearance === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => handleSelectAppearanceMode(opt.id)}
+                    className="p-3.5 rounded-xl border text-left flex items-center gap-3 cursor-pointer"
+                    style={{
+                      backgroundColor: active ? 'var(--surface-elevated)' : 'var(--surface)',
+                      borderColor: active ? 'var(--primary)' : 'var(--border)',
+                    }}
+                  >
+                    <div
+                      className="p-2 rounded-lg shrink-0"
+                      style={{
+                        backgroundColor: active ? 'var(--primary)' : 'var(--surface-elevated)',
+                        color: active ? 'var(--btn-text)' : 'var(--text-main)',
+                      }}
+                    >
+                      {opt.icon}
+                    </div>
+                    <div>
                       <span
-                        className="text-xs font-semibold truncate"
+                        className="block text-xs font-semibold"
                         style={{ color: 'var(--text-main)' }}
                       >
-                        {t.customerName} · {t.location}
+                        {opt.label}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTestimonial(t.id)}
-                        aria-label={`Delete testimonial from ${t.customerName}`}
-                        className="p-1 rounded cursor-pointer"
-                        style={{ color: 'var(--error-text)' }}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                        {opt.desc}
+                      </span>
                     </div>
-                    <p className="text-xs italic leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                      “{t.quote}”
-                    </p>
-                  </div>
-                  {t.productBought && (
-                    <span className="text-[10px] font-medium truncate" style={{ color: 'var(--accent)' }}>
-                      Verified Piece: {t.productBought}
-                    </span>
-                  )}
-                </div>
-              ))}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 3. Live Theme Preview */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-3"
+            style={{
+              backgroundColor: 'var(--bg)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <span
+                className="text-xs font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Live Color Preview ({activeThemeObj.name})
+              </span>
+              <span className="text-xs font-medium" style={{ color: 'var(--primary)' }}>
+                Active on Storefront
+              </span>
             </div>
 
-            {/* Add Testimonial Form */}
-            <form
-              onSubmit={handleAddTestimonial}
-              className="p-4 rounded-xl border grid grid-cols-1 sm:grid-cols-4 gap-3 items-end"
+            <div
+              className="p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
               style={{
-                backgroundColor: 'var(--surface-elevated)',
+                backgroundColor: 'var(--surface)',
                 borderColor: 'var(--border)',
               }}
             >
               <div>
-                <label
-                  htmlFor="new-test-name"
-                  className="block text-[11px] font-semibold uppercase mb-1"
-                  style={{ color: 'var(--text-muted)' }}
+                <span
+                  className="text-[11px] uppercase tracking-wider font-semibold"
+                  style={{ color: 'var(--accent)' }}
                 >
-                  Customer Name
-                </label>
-                <input
-                  id="new-test-name"
-                  type="text"
-                  value={newTestimonial.customerName}
-                  onChange={(e) =>
-                    setNewTestimonial({ ...newTestimonial, customerName: e.target.value })
-                  }
-                  placeholder="e.g. Kavita Nair"
-                  className="w-full min-w-0 p-2 border rounded-lg text-xs"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="new-test-city"
-                  className="block text-[11px] font-semibold uppercase mb-1"
-                  style={{ color: 'var(--text-muted)' }}
+                  {storeSettings.storeName || 'Indian Ishq Collection'}
+                </span>
+                <h5
+                  className="font-serif text-lg font-semibold mt-0.5"
+                  style={{ color: 'var(--text-main)' }}
                 >
-                  City
-                </label>
-                <input
-                  id="new-test-city"
-                  type="text"
-                  value={newTestimonial.location}
-                  onChange={(e) =>
-                    setNewTestimonial({ ...newTestimonial, location: e.target.value })
-                  }
-                  placeholder="e.g. Hyderabad"
-                  className="w-full min-w-0 p-2 border rounded-lg text-xs"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
+                  Handcrafted Festive Kurta Set
+                </h5>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                  Pure Chanderi Silk · ₹1,899
+                </p>
               </div>
-              <div>
-                <label
-                  htmlFor="new-test-quote"
-                  className="block text-[11px] font-semibold uppercase mb-1"
-                  style={{ color: 'var(--text-muted)' }}
-                >
-                  Review Quote
-                </label>
-                <input
-                  id="new-test-quote"
-                  type="text"
-                  value={newTestimonial.quote}
-                  onChange={(e) => setNewTestimonial({ ...newTestimonial, quote: e.target.value })}
-                  placeholder="Genuine customer feedback..."
-                  className="w-full min-w-0 p-2 border rounded-lg text-xs"
-                  style={{
-                    backgroundColor: 'var(--input-bg)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                />
-              </div>
-              <button
-                type="submit"
-                className="px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer"
+              <span
+                className="px-4 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider shrink-0"
                 style={{
                   backgroundColor: 'var(--primary)',
                   color: 'var(--btn-text)',
                 }}
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Review</span>
-              </button>
-            </form>
+                Add to Bag
+              </span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* =====================================================================
-          SUB-SECTION C: HERO SLIDESHOW
-         ===================================================================== */}
-      {subTab === 'slideshow' && (
-        <HeroSlideshowManager
-          storeSettings={storeSettings}
-          isSaving={isSaving}
-          onChangeSettings={onChangeSettings}
-          onSaveSettings={onSaveSettings}
-          onBanner={onBanner}
-        />
-      )}
-
-      {/* =====================================================================
-          SUB-SECTION D: PRODUCT & CATALOG DISPLAY SETTINGS
-         ===================================================================== */}
-      {subTab === 'catalog' && (
-        <div
-          className="p-5 sm:p-6 rounded-xl border space-y-6 min-w-0"
-          style={{
-            backgroundColor: 'var(--surface)',
-            borderColor: 'var(--border)',
-          }}
-        >
-          <div>
-            <h4
-              className="font-serif text-lg font-semibold"
-              style={{ color: 'var(--text-main)' }}
-            >
-              Product Card & Catalog Grid Customization
-            </h4>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Control how products, prices, stock badges, and shipping thresholds appear across the
-              storefront.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* ===================================================================== */}
+      {/* AREA C: STORE INFORMATION (Simple Forms with Clear Labels & Examples) */}
+      {/* ===================================================================== */}
+      {activeArea === 'info' && (
+        <div className="space-y-5">
+          {/* 1. Store Name, Tagline & Logo */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-4"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
             <div>
-              <label
-                htmlFor="cust-grid-cols"
-                className="block text-xs font-semibold uppercase mb-1"
-                style={{ color: 'var(--text-muted)' }}
+              <h4
+                className="font-serif text-lg font-semibold"
+                style={{ color: 'var(--text-main)' }}
               >
-                Desktop Product Grid Layout
-              </label>
-              <select
-                id="cust-grid-cols"
-                value={storeSettings.gridColumnsDesktop || 4}
-                onChange={(e) =>
-                  onChangeSettings({
-                    ...storeSettings,
-                    gridColumnsDesktop: Number(e.target.value) === 3 ? 3 : 4,
-                  })
-                }
-                className="w-full p-2.5 border rounded-lg text-xs"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              >
-                <option value={4}>4 Columns (Standard Boutique Grid)</option>
-                <option value={3}>3 Columns (Large Editorial Portrait Cards)</option>
-              </select>
+                1. Store Name, Tagline & Logo
+              </h4>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Shown at the top of your website and in the footer.
+              </p>
             </div>
 
-            <div>
-              <label
-                htmlFor="cust-free-shipping"
-                className="block text-xs font-semibold uppercase mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Free Shipping Threshold (₹)
-              </label>
-              <input
-                id="cust-free-shipping"
-                type="number"
-                min={0}
-                value={storeSettings.freeShippingThreshold ?? 1999}
-                onChange={(e) =>
-                  onChangeSettings({
-                    ...storeSettings,
-                    freeShippingThreshold: Math.max(0, Number(e.target.value)),
-                  })
-                }
-                className="w-full p-2.5 border rounded-lg text-xs tabular-nums"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="cust-shipping-fee"
-                className="block text-xs font-semibold uppercase mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Standard Shipping Fee below Threshold (₹)
-              </label>
-              <input
-                id="cust-shipping-fee"
-                type="number"
-                min={0}
-                value={storeSettings.standardShippingFee ?? 99}
-                onChange={(e) =>
-                  onChangeSettings({
-                    ...storeSettings,
-                    standardShippingFee: Math.max(0, Number(e.target.value)),
-                  })
-                }
-                className="w-full p-2.5 border rounded-lg text-xs tabular-nums"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {(
-              [
-                {
-                  key: 'showStockCount',
-                  title: 'Show Stock Count on Cards',
-                  desc: 'Displays "8 in stock" next to product price',
-                },
-                {
-                  key: 'showDiscountPrice',
-                  title: 'Show Strikethrough Compare Price',
-                  desc: 'Displays original price alongside sale price',
-                },
-                {
-                  key: 'showFabricInfo',
-                  title: 'Show Fabric & Craft Subtitle',
-                  desc: 'Displays textile details below product title',
-                },
-                {
-                  key: 'showWishlistButton',
-                  title: 'Show Wishlist Heart Icon',
-                  desc: 'Allows customers to save pieces to wishlist',
-                },
-                {
-                  key: 'showWhatsappInquiry',
-                  title: 'Show WhatsApp Piece Inquiry',
-                  desc: 'Direct WhatsApp inquiry button in Product Modal',
-                },
-                {
-                  key: 'whatsappOrderEnabled',
-                  title: 'Enable WhatsApp Checkout Option',
-                  desc: 'Allows customers to share order summary on WhatsApp',
-                },
-              ] as const
-            ).map((toggle) => (
-              <label
-                key={toggle.key}
-                className="p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: storeSettings[toggle.key] ? 'var(--primary)' : 'var(--border)',
-                }}
-              >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="cust-store-name"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Store Name
+                </label>
                 <input
-                  type="checkbox"
-                  checked={Boolean(storeSettings[toggle.key])}
-                  onChange={(e) =>
-                    onChangeSettings({
-                      ...storeSettings,
-                      [toggle.key]: e.target.checked,
-                    })
-                  }
-                  className="mt-0.5 accent-current"
-                />
-                <div>
-                  <span
-                    className="block text-xs font-semibold"
-                    style={{ color: 'var(--text-main)' }}
-                  >
-                    {toggle.title}
-                  </span>
-                  <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    {toggle.desc}
-                  </span>
-                </div>
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* =====================================================================
-          SUB-SECTION E: HEADER, ANNOUNCEMENT & FOOTER CONTROLS
-         ===================================================================== */}
-      {subTab === 'headerFooter' && (
-        <div
-          className="p-5 sm:p-6 rounded-xl border space-y-6 min-w-0"
-          style={{
-            backgroundColor: 'var(--surface)',
-            borderColor: 'var(--border)',
-          }}
-        >
-          <div>
-            <h4
-              className="font-serif text-lg font-semibold"
-              style={{ color: 'var(--text-main)' }}
-            >
-              Header Announcement Bar & Footer Sections
-            </h4>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Control top banner messaging, header theme controls, and footer blocks. Essential
-              navigation and legal contact details remain permanently enabled.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-              <label
-                className="p-3.5 rounded-xl border flex items-center gap-3 cursor-pointer shrink-0"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: storeSettings.announcementEnabled
-                    ? 'var(--primary)'
-                    : 'var(--border)',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={storeSettings.announcementEnabled !== false}
-                  onChange={(e) =>
-                    onChangeSettings({
-                      ...storeSettings,
-                      announcementEnabled: e.target.checked,
-                    })
-                  }
-                  className="accent-current w-4 h-4"
-                />
-                <span className="text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
-                  Show Top Announcement Bar
-                </span>
-              </label>
-
-              <div className="flex-1 min-w-0">
-                <input
+                  id="cust-store-name"
                   type="text"
-                  aria-label="Announcement bar text"
-                  value={storeSettings.announcementText}
-                  onChange={(e) =>
-                    onChangeSettings({ ...storeSettings, announcementText: e.target.value })
-                  }
-                  placeholder="Complimentary express shipping on orders above ₹1,999..."
-                  className="w-full min-w-0 p-2.5 border rounded-lg text-xs"
+                  value={storeSettings.storeName}
+                  onChange={(e) => updateField('storeName', e.target.value)}
+                  placeholder="Example: Indian Ishq Collection"
+                  className="w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cust-store-tagline"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Tagline
+                </label>
+                <input
+                  id="cust-store-tagline"
+                  type="text"
+                  value={storeSettings.tagline}
+                  onChange={(e) => updateField('tagline', e.target.value)}
+                  placeholder="Example: Timeless Indian silhouettes, woven with ishq."
+                  className="w-full p-2.5 rounded-lg border text-xs"
                   style={{
                     backgroundColor: 'var(--input-bg)',
                     borderColor: 'var(--border)',
@@ -2040,87 +1505,389 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-              {(
-                [
-                  {
-                    key: 'showThemeSelectorInHeader',
-                    title: 'Visitor Theme Selector in Header',
-                    desc: 'Allows shoppers to switch colour palettes live',
-                  },
-                  {
-                    key: 'showFooterSocial',
-                    title: 'Show Social Media Icons in Footer',
-                    desc: 'Instagram, Facebook, and Twitter/X links',
-                  },
-                  {
-                    key: 'showFooterHours',
-                    title: 'Show Boutique Business Hours',
-                    desc: 'Monday–Saturday & Sunday schedule in footer',
-                  },
-                  {
-                    key: 'showFooterMap',
-                    title: 'Show Flagship Location & Google Maps',
-                    desc: 'Physical address and directions link in footer',
-                  },
-                  {
-                    key: 'showFooterPolicies',
-                    title: 'Show Shipping & Return Policy Row',
-                    desc: 'Summary of delivery and exchange policies in footer',
-                  },
-                ] as const
-              ).map((item) => (
+            {/* Store Logo */}
+            <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+              <label
+                htmlFor="cust-logo-url"
+                className="block text-xs font-semibold mb-1.5"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Store Logo (Optional)
+              </label>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                {storeSettings.logoUrl && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <img
+                      src={storeSettings.logoUrl}
+                      alt="Store logo"
+                      referrerPolicy="no-referrer"
+                      className="w-12 h-12 rounded-lg object-cover border"
+                      style={{ borderColor: 'var(--border)' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateField('logoUrl', '')}
+                      className="text-xs underline cursor-pointer"
+                      style={{ color: 'var(--error-text)' }}
+                    >
+                      Remove Logo
+                    </button>
+                  </div>
+                )}
+
                 <label
-                  key={item.key}
-                  className="p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer"
+                  className="px-4 py-2.5 rounded-lg border text-xs font-semibold flex items-center gap-2 cursor-pointer shrink-0"
                   style={{
                     backgroundColor: 'var(--surface-elevated)',
-                    borderColor: storeSettings[item.key] ? 'var(--primary)' : 'var(--border)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--primary)',
                   }}
                 >
+                  <Upload className="w-4 h-4" />
+                  <span>{isUploadingLogo ? 'Uploading...' : 'Upload Logo Photo'}</span>
                   <input
-                    type="checkbox"
-                    checked={Boolean(storeSettings[item.key])}
-                    onChange={(e) =>
-                      onChangeSettings({
-                        ...storeSettings,
-                        [item.key]: e.target.checked,
-                      })
-                    }
-                    className="mt-0.5 accent-current"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoUpload}
+                    className="hidden"
                   />
-                  <div>
-                    <span
-                      className="block text-xs font-semibold"
-                      style={{ color: 'var(--text-main)' }}
-                    >
-                      {item.title}
-                    </span>
-                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      {item.desc}
-                    </span>
-                  </div>
                 </label>
-              ))}
+
+                <input
+                  id="cust-logo-url"
+                  type="url"
+                  value={storeSettings.logoUrl.startsWith('data:') ? '' : storeSettings.logoUrl}
+                  onChange={(e) => updateField('logoUrl', e.target.value)}
+                  placeholder="Or paste logo image link (https://...)"
+                  className="flex-1 w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 2. Phone, WhatsApp, Address & Google Maps */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-4"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div>
+              <h4
+                className="font-serif text-lg font-semibold"
+                style={{ color: 'var(--text-main)' }}
+              >
+                2. Contact Details & Boutique Location
+              </h4>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Helps customers call, WhatsApp, or visit your store.
+              </p>
             </div>
 
-            <div
-              className="p-3.5 rounded-xl border flex items-center gap-2.5 text-xs"
-              style={{
-                backgroundColor: 'var(--surface-elevated)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <ShieldCheck className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
-              <span>
-                Essential navigation, shopping bag, checkout flows, and customer support contact
-                links are protected and always remain accessible to shoppers.
-              </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="cust-phone"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Phone Number
+                </label>
+                <input
+                  id="cust-phone"
+                  type="text"
+                  value={storeSettings.phone}
+                  onChange={(e) => updateField('phone', e.target.value)}
+                  placeholder="Example: +91 98765 43210"
+                  className="w-full p-2.5 rounded-lg border text-xs tabular-nums"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cust-whatsapp"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  WhatsApp Number (with 91 country code)
+                </label>
+                <input
+                  id="cust-whatsapp"
+                  type="text"
+                  value={storeSettings.whatsapp}
+                  onChange={(e) => updateField('whatsapp', e.target.value)}
+                  placeholder="Example: 919876543210"
+                  className="w-full p-2.5 rounded-lg border text-xs tabular-nums"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label
+                  htmlFor="cust-address"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Business Address
+                </label>
+                <input
+                  id="cust-address"
+                  type="text"
+                  value={storeSettings.address}
+                  onChange={(e) => updateField('address', e.target.value)}
+                  placeholder="Example: Shop 14, Johari Bazar, Pink City, Jaipur, Rajasthan 302003"
+                  className="w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label
+                  htmlFor="cust-maps"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Google Maps Link
+                </label>
+                <input
+                  id="cust-maps"
+                  type="url"
+                  value={storeSettings.mapsUrl}
+                  onChange={(e) => updateField('mapsUrl', e.target.value)}
+                  placeholder="Example: https://maps.google.com/?q=Johari+Bazar+Jaipur"
+                  className="w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Delivery Information & Return Policy */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-4"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div>
+              <h4
+                className="font-serif text-lg font-semibold"
+                style={{ color: 'var(--text-main)' }}
+              >
+                3. Delivery & Return Policy
+              </h4>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Shown on product pages and in the website footer so customers can shop with confidence.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="cust-delivery"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Delivery Information
+                </label>
+                <textarea
+                  id="cust-delivery"
+                  rows={3}
+                  value={storeSettings.deliveryPolicy}
+                  onChange={(e) => updateField('deliveryPolicy', e.target.value)}
+                  placeholder="Example: Free delivery across India on orders above ₹1,999. Dispatched within 24–48 hours."
+                  className="w-full p-2.5 rounded-lg border text-xs leading-relaxed"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cust-returns"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Return and Exchange Policy
+                </label>
+                <textarea
+                  id="cust-returns"
+                  rows={3}
+                  value={storeSettings.returnPolicy}
+                  onChange={(e) => updateField('returnPolicy', e.target.value)}
+                  placeholder="Example: Easy 7-day returns and size exchanges on unworn items with original tags."
+                  className="w-full p-2.5 rounded-lg border text-xs leading-relaxed"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 4. Social Media Links */}
+          <div
+            className="p-4 sm:p-5 rounded-xl border space-y-4"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <div>
+              <h4
+                className="font-serif text-lg font-semibold"
+                style={{ color: 'var(--text-main)' }}
+              >
+                4. Social Media Links (Optional)
+              </h4>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Paste your social profile links so customers can follow your boutique.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label
+                  htmlFor="cust-instagram"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Instagram Link
+                </label>
+                <input
+                  id="cust-instagram"
+                  type="url"
+                  value={storeSettings.instagramUrl}
+                  onChange={(e) => updateField('instagramUrl', e.target.value)}
+                  placeholder="Example: https://instagram.com/indianishq"
+                  className="w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cust-facebook"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Facebook Link
+                </label>
+                <input
+                  id="cust-facebook"
+                  type="url"
+                  value={storeSettings.facebookUrl}
+                  onChange={(e) => updateField('facebookUrl', e.target.value)}
+                  placeholder="Example: https://facebook.com/indianishq"
+                  className="w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="cust-twitter"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Twitter / X Link
+                </label>
+                <input
+                  id="cust-twitter"
+                  type="url"
+                  value={storeSettings.twitterUrl}
+                  onChange={(e) => updateField('twitterUrl', e.target.value)}
+                  placeholder="Example: https://x.com/indianishq"
+                  className="w-full p-2.5 rounded-lg border text-xs"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Bottom Save & Cancel Bar */}
+      <div
+        className="p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3"
+        style={{
+          backgroundColor: 'var(--surface-elevated)',
+          borderColor: 'var(--border)',
+        }}
+      >
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          All changes are saved to your live store immediately when you tap Save Changes.
+        </span>
+        <div className="flex items-center gap-2.5 ml-auto">
+          {onCancelChanges && (
+            <button
+              type="button"
+              onClick={onCancelChanges}
+              className="px-4 py-2.5 rounded-lg border text-xs font-semibold cursor-pointer"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => onSaveSettings(undefined, storeSettings)}
+            className="px-6 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer disabled:opacity-50 shadow-sm"
+            style={{
+              backgroundColor: 'var(--primary)',
+              color: 'var(--btn-text)',
+            }}
+          >
+            {isSaving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

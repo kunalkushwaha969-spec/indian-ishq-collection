@@ -28,13 +28,22 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onWishlistClick,
 }) => {
   const isSaree = product?.category.toLowerCase() === 'sarees';
-  const availableSizes = isSaree ? ['Free Size (5.5m + Blouse)'] : ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
+  const availableSizes =
+    product?.sizes && product.sizes.length > 0
+      ? product.sizes
+      : isSaree
+      ? ['Free Size (5.5m + Blouse)']
+      : ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
   const [selectedSize, setSelectedSize] = useState<string>(availableSizes[0]);
 
   useEffect(() => {
     if (product) {
-      const saree = product.category.toLowerCase() === 'sarees';
-      setSelectedSize(saree ? 'Free Size (5.5m + Blouse)' : 'M');
+      if (product.sizes && product.sizes.length > 0) {
+        setSelectedSize(product.sizes[0]);
+      } else {
+        const saree = product.category.toLowerCase() === 'sarees';
+        setSelectedSize(saree ? 'Free Size (5.5m + Blouse)' : 'M');
+      }
     }
   }, [product]);
 
@@ -155,6 +164,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
             {/* Craft & Fabric Details */}
             <div className="space-y-3 mb-6">
+              {product.description && (
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                    Description
+                  </span>
+                  <p className="text-sm leading-relaxed" style={{ color: 'var(--text-main)' }}>
+                    {product.description}
+                  </p>
+                </div>
+              )}
               <div>
                 <span className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
                   Fabric & Craftsmanship

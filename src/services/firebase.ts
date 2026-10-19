@@ -14,7 +14,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import type { Product, Order } from '../utils/ecommerce';
-import { initialProducts } from '../utils/ecommerce';
+import { initialProducts, resolveSafeProductImage } from '../utils/ecommerce';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Safely initialize Firestore instance with fallback
@@ -72,7 +72,10 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
       return await seedFirestoreIfEmpty();
     }
     const list: Product[] = [];
-    snap.forEach((d) => list.push(d.data() as Product));
+    snap.forEach((d) => {
+      const data = d.data() as Product;
+      list.push({ ...data, image_url: resolveSafeProductImage(data) });
+    });
     return list;
   } catch (err) {
     try {
@@ -82,7 +85,10 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
         return await seedFirestoreIfEmpty();
       }
       const list: Product[] = [];
-      snap.forEach((d) => list.push(d.data() as Product));
+      snap.forEach((d) => {
+        const data = d.data() as Product;
+        list.push({ ...data, image_url: resolveSafeProductImage(data) });
+      });
       return list;
     } catch {
       return [...initialProducts];
@@ -177,7 +183,10 @@ export function subscribeToFirestoreProducts(callback: (products: Product[]) => 
           return;
         }
         const items: Product[] = [];
-        snap.forEach((d) => items.push(d.data() as Product));
+        snap.forEach((d) => {
+          const data = d.data() as Product;
+          items.push({ ...data, image_url: resolveSafeProductImage(data) });
+        });
         callback(items);
       },
       (error) => {

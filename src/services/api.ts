@@ -5,6 +5,7 @@ import {
   formatINR,
   generateUpiUri,
   resolveInitialOrderStatus,
+  resolveSafeProductImage,
 } from '../utils/ecommerce';
 import {
   fetchFirestoreProducts,
@@ -48,7 +49,10 @@ const isStaticHost = (): boolean => {
 function getLocalProducts(): Product[] {
   try {
     const raw = localStorage.getItem(PRODUCTS_STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Product[];
+      return parsed.map((p) => ({ ...p, image_url: resolveSafeProductImage(p) }));
+    }
   } catch {}
   return [...initialProducts];
 }
@@ -206,7 +210,11 @@ export async function createProduct(
     name: product.name,
     category: product.category,
     price: Number(product.price),
-    ...(product.old_price ? { old_price: Number(product.old_price) } : {}),
+    ...(product.old_price && Number(product.old_price) > Number(product.price)
+      ? { old_price: Number(product.old_price) }
+      : {}),
+    ...(product.description ? { description: product.description.trim() } : {}),
+    ...(product.sizes && product.sizes.length > 0 ? { sizes: product.sizes } : {}),
     stock: Number(product.stock),
     image_url: product.image_url,
     tag: product.tag || 'NEW',
@@ -236,6 +244,77 @@ export async function createProduct(
   });
 
   return createdProduct;
+}
+
+export async function updateProduct(
+  id: string,
+  updates: Partial<Omit<Product, 'id'>>
+): Promise<Product> {
+  const existing = getLocalProducts();
+  const current = existing.find((p) => p.id === id);
+
+  const nextPrice =
+    updates.price !== undefined ? Number(updates.price) : current?.price ?? 1499;
+  const nextOldPrice =
+    updates.old_price !== undefined
+      ? Number(updates.old_price)
+      : current?.old_price;
+
+  const updatedRecord: Product = {
+    id,
+    name: updates.name !== undefined ? updates.name.trim() : current?.name || 'Boutique Piece',
+    category: updates.category !== undefined ? updates.category : current?.category || 'Kurtis',
+    price: nextPrice,
+    ...(nextOldPrice && nextOldPrice > nextPrice ? { old_price: nextOldPrice } : {}),
+    ...(updates.description !== undefined
+      ? updates.description.trim()
+        ? { description: updates.description.trim() }
+        : {}
+      : current?.description
+      ? { description: current.description }
+      : {}),
+    ...(updates.sizes !== undefined
+      ? updates.sizes.length > 0
+        ? { sizes: updates.sizes }
+        : {}
+      : current?.sizes
+      ? { sizes: current.sizes }
+      : {}),
+    stock:
+      updates.stock !== undefined
+        ? Math.max(0, Number(updates.stock))
+        : current?.stock ?? 10,
+    image_url:
+      updates.image_url !== undefined
+        ? updates.image_url
+        : current?.image_url ||
+          'https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&w=800&q=80',
+    tag: updates.tag !== undefined ? updates.tag : current?.tag || 'NEW',
+    fabric:
+      updates.fabric !== undefined
+        ? updates.fabric
+        : current?.fabric || 'Handcrafted Indian Ethnic Wear',
+    created_at: current?.created_at || new Date().toISOString(),
+  };
+
+  try {
+    await saveFirestoreProduct(updatedRecord);
+  } catch (err) {
+    console.warn('Firestore product update warning:', err);
+  }
+
+  const nextList = existing.some((p) => p.id === id)
+    ? existing.map((p) => (p.id === id ? updatedRecord : p))
+    : [updatedRecord, ...existing];
+  setLocalProducts(nextList);
+
+  addMerchantActivity({
+    type: 'inventory',
+    title: 'Product Updated',
+    detail: `"${updatedRecord.name}" updated (${updatedRecord.stock} in stock · ₹${updatedRecord.price})`,
+  });
+
+  return updatedRecord;
 }
 
 export async function updateProductStock(

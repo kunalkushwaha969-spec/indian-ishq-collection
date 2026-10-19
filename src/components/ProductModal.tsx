@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { Product } from '../utils/ecommerce';
-import { uploadImageDirect, createProduct } from '../services/api';
+import { formatINR } from '../utils/ecommerce';
+import { uploadImageDirect, createProduct, updateProduct } from '../services/api';
 import {
   UploadCloud,
   Image as ImageIcon,
@@ -10,29 +11,41 @@ import {
   Camera,
   CheckCircle2,
   Video,
+  Plus,
+  Minus,
 } from 'lucide-react';
 
 interface ProductModalProps {
   isOpen: boolean;
   onClose: () => void;
   onProductCreated: (product: Product) => void;
+  initialProduct?: Product | null;
+  onProductUpdated?: (product: Product) => void;
 }
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+const SIZE_OPTIONS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'Free Size'];
+const TAG_OPTIONS = ['NEW', 'BESTSELLER', 'FESTIVE', 'CURATED', 'HANDCRAFTED'];
 
 export const ProductModal: React.FC<ProductModalProps> = ({
   isOpen,
   onClose,
   onProductCreated,
+  initialProduct = null,
+  onProductUpdated,
 }) => {
+  const isEditing = Boolean(initialProduct);
+
   const [name, setName] = useState('');
   const [category, setCategory] = useState('Kurtis');
-  const [price, setPrice] = useState('');
-  const [oldPrice, setOldPrice] = useState('');
+  const [regularPrice, setRegularPrice] = useState('');
+  const [salePrice, setSalePrice] = useState('');
+  const [description, setDescription] = useState('');
   const [stock, setStock] = useState('10');
   const [fabric, setFabric] = useState('');
   const [tag, setTag] = useState('NEW');
+  const [sizes, setSizes] = useState<string[]>(['S', 'M', 'L', 'XL']);
   const [imageUrl, setImageUrl] = useState('');
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>('');
@@ -48,6 +61,50 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mobileCameraInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setErrorMsg(null);
+    setCameraError(null);
+    setImageFile(null);
+
+    if (initialProduct) {
+      setName(initialProduct.name || '');
+      setCategory(initialProduct.category || 'Kurtis');
+      const hasDiscount =
+        Boolean(initialProduct.old_price) &&
+        Number(initialProduct.old_price) > Number(initialProduct.price);
+      setRegularPrice(
+        hasDiscount ? String(initialProduct.old_price) : String(initialProduct.price || '')
+      );
+      setSalePrice(hasDiscount ? String(initialProduct.price) : '');
+      setDescription(initialProduct.description || '');
+      setStock(String(initialProduct.stock ?? 10));
+      setFabric(initialProduct.fabric || '');
+      setTag(initialProduct.tag || 'NEW');
+      setSizes(
+        initialProduct.sizes && initialProduct.sizes.length > 0
+          ? initialProduct.sizes
+          : initialProduct.category.toLowerCase() === 'sarees'
+          ? ['Free Size']
+          : ['S', 'M', 'L', 'XL']
+      );
+      setImageUrl(initialProduct.image_url || '');
+      setPreviewUrl(initialProduct.image_url || '');
+    } else {
+      setName('');
+      setCategory('Kurtis');
+      setRegularPrice('');
+      setSalePrice('');
+      setDescription('');
+      setStock('10');
+      setFabric('');
+      setTag('NEW');
+      setSizes(['S', 'M', 'L', 'XL']);
+      setImageUrl('');
+      setPreviewUrl('');
+    }
+  }, [isOpen, initialProduct]);
 
   useEffect(() => {
     return () => {
@@ -77,12 +134,12 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     if (!file) return;
 
     if (!validateFormat(file)) {
-      setErrorMsg('Unsupported format. Please upload JPEG, PNG, or WebP images only.');
+      setErrorMsg('Please choose a JPEG, PNG, or WebP photo.');
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      setErrorMsg('Image size must be under 5MB.');
+      setErrorMsg('Photo size must be under 5MB.');
       return;
     }
 
@@ -126,10 +183,10 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         }
       }, 100);
     } catch {
-      setCameraError('Webcam access was denied or unavailable. Opening device camera.');
+      setCameraError('Opening your phone camera...');
       setTimeout(() => {
         mobileCameraInputRef.current?.click();
-      }, 300);
+      }, 250);
     }
   };
 
@@ -163,18 +220,44 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     );
   };
 
+  const toggleSize = (size: string) => {
+    setSizes((prev) =>
+      prev.includes(size) ? prev.filter((s) => s !== size) : [...prev, size]
+    );
+  };
+
+  const parsedRegular = Number(regularPrice) || 0;
+  const parsedSale = salePrice.trim() ? Number(salePrice) || 0 : 0;
+  const isSaleActive = parsedSale > 0 && parsedSale < parsedRegular;
+  const effectiveCustomerPrice = isSaleActive ? parsedSale : parsedRegular;
+  const effectiveOldPrice = isSaleActive
+    ? parsedRegular
+    : parsedSale > parsedRegular
+    ? parsedSale
+    : undefined;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
-    let finalImageUrl = imageUrl.trim();
+    if (!name.trim()) {
+      setErrorMsg('Please enter a product name.');
+      return;
+    }
+
+    if (parsedRegular <= 0) {
+      setErrorMsg('Please enter a valid price in ₹.');
+      return;
+    }
+
+    let finalImageUrl = imageUrl.trim() || previewUrl;
 
     if (imageFile) {
       try {
         setIsUploading(true);
         finalImageUrl = await uploadImageDirect(imageFile);
       } catch (err: any) {
-        console.warn('[Product Image Fallback]: Cloud storage notice, using local image preview:', err);
+        console.warn('[Product Image Fallback]: Using local photo preview:', err);
         finalImageUrl =
           previewUrl ||
           imageUrl.trim() ||
@@ -185,28 +268,37 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     }
 
     if (!finalImageUrl) {
-      setErrorMsg('Please upload a product photo, snap a photo with your camera, or enter an image URL.');
+      setErrorMsg('Please upload a product photo, take a picture with your camera, or paste an image link.');
       return;
     }
 
     try {
       setIsSaving(true);
-      const newProduct = await createProduct({
+      const payload = {
         name: name.trim(),
         category,
-        price: Number(price),
-        old_price: oldPrice ? Number(oldPrice) : Number(price),
-        stock: Number(stock),
+        price: effectiveCustomerPrice,
+        old_price: effectiveOldPrice,
+        description: description.trim() || undefined,
+        sizes: sizes.length > 0 ? sizes : ['Free Size'],
+        stock: Math.max(0, Number(stock) || 0),
         image_url: finalImageUrl,
         tag: tag.trim() || 'NEW',
         fabric: fabric.trim() || 'Handcrafted Indian Ethnic Wear',
-      });
+      };
 
-      onProductCreated(newProduct);
+      if (isEditing && initialProduct) {
+        const updated = await updateProduct(initialProduct.id, payload);
+        onProductUpdated?.(updated);
+      } else {
+        const created = await createProduct(payload);
+        onProductCreated(created);
+      }
+
       stopCameraStream();
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to save product to catalog');
+      setErrorMsg(err.message || 'Could not save product. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -216,8 +308,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="add-product-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      aria-labelledby="product-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-6 overflow-y-auto"
       style={{ backgroundColor: 'var(--overlay)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
@@ -227,7 +319,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       }}
     >
       <div
-        className="w-full max-w-[620px] rounded-xl shadow-2xl border my-4 overflow-hidden transition-colors"
+        className="w-full max-w-[640px] rounded-xl shadow-2xl border my-auto max-h-[92vh] flex flex-col overflow-hidden transition-colors"
         style={{
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',
@@ -236,15 +328,15 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       >
         {/* Modal Header */}
         <div
-          className="flex items-center justify-between px-6 py-4 border-b"
+          className="flex items-center justify-between px-4 sm:px-6 py-4 border-b shrink-0"
           style={{
             backgroundColor: 'var(--surface-elevated)',
             borderColor: 'var(--border)',
           }}
         >
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div
-              className="p-2 rounded-lg border"
+              className="p-2 rounded-lg border shrink-0"
               style={{
                 backgroundColor: 'var(--surface)',
                 borderColor: 'var(--border)',
@@ -253,16 +345,18 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             >
               <UploadCloud className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2
-                id="add-product-title"
-                className="font-serif text-xl sm:text-2xl font-semibold"
+                id="product-modal-title"
+                className="font-serif text-xl sm:text-2xl font-semibold truncate"
                 style={{ color: 'var(--text-main)' }}
               >
-                Add Product to Catalog
+                {isEditing ? 'Edit Product' : 'Add New Product'}
               </h2>
-              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Add a new handcrafted piece to your boutique catalog
+              <span className="text-xs block truncate" style={{ color: 'var(--text-muted)' }}>
+                {isEditing
+                  ? 'Update product details, price, or photo'
+                  : 'Add an outfit to your store in a few simple steps'}
               </span>
             </div>
           </div>
@@ -272,8 +366,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
               stopCameraStream();
               onClose();
             }}
-            aria-label="Close product modal"
-            className="w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer"
+            aria-label="Close product form"
+            className="w-10 h-10 rounded-lg border flex items-center justify-center cursor-pointer shrink-0"
             style={{
               backgroundColor: 'var(--surface)',
               borderColor: 'var(--border)',
@@ -284,35 +378,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
           </button>
         </div>
 
-        {errorMsg && (
-          <div
-            className="mx-6 mt-4 p-3 rounded-lg border text-xs flex items-center gap-2"
-            style={{
-              backgroundColor: 'var(--error-bg)',
-              borderColor: 'var(--error-border)',
-              color: 'var(--error-text)',
-            }}
-          >
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        {cameraError && (
-          <div
-            className="mx-6 mt-4 p-3 rounded-lg border text-xs flex items-center gap-2"
-            style={{
-              backgroundColor: 'var(--warning-bg)',
-              borderColor: 'var(--warning-border)',
-              color: 'var(--warning-text)',
-            }}
-          >
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{cameraError}</span>
-          </div>
-        )}
-
-        {/* Hidden Camera Inputs */}
+        {/* Hidden Camera & File Inputs */}
         <input
           ref={fileInputRef}
           type="file"
@@ -330,191 +396,59 @@ export const ProductModal: React.FC<ProductModalProps> = ({
         />
         <canvas ref={canvasRef} className="hidden" />
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Product Name *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Kasauti Cotton Kurti"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
+        {/* Scrollable Form Body */}
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5 overflow-y-auto flex-1">
+          {errorMsg && (
+            <div
+              className="p-3 rounded-lg border text-xs flex items-center gap-2"
+              style={{
+                backgroundColor: 'var(--error-bg)',
+                borderColor: 'var(--error-border)',
+                color: 'var(--error-text)',
+              }}
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
             </div>
+          )}
 
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Category *
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              >
-                <option value="Kurtis">Kurtis</option>
-                <option value="Sarees">Sarees</option>
-                <option value="Suits">Suit Sets</option>
-                <option value="Festive">Festive Wear</option>
-                <option value="Everyday">Everyday</option>
-              </select>
+          {cameraError && (
+            <div
+              className="p-3 rounded-lg border text-xs flex items-center gap-2"
+              style={{
+                backgroundColor: 'var(--warning-bg)',
+                borderColor: 'var(--warning-border)',
+                color: 'var(--warning-text)',
+              }}
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{cameraError}</span>
             </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Price (₹) *
-              </label>
-              <input
-                type="number"
-                required
-                min={1}
-                placeholder="1499"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Strike Price (₹)
-              </label>
-              <input
-                type="number"
-                min={1}
-                placeholder="1899"
-                value={oldPrice}
-                onChange={(e) => setOldPrice(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Stock Count *
-              </label>
-              <input
-                type="number"
-                required
-                min={0}
-                placeholder="10"
-                value={stock}
-                onChange={(e) => setStock(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Fabric Details / Craft
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Hand-block Mulmul Cotton"
-                value={fabric}
-                onChange={(e) => setFabric(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-            <div>
-              <label
-                className="block text-xs font-semibold uppercase tracking-wider mb-1"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                Badge / Tag
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. BESTSELLER, NEW, CURATED"
-                value={tag}
-                onChange={(e) => setTag(e.target.value)}
-                className="w-full p-2.5 rounded-lg border text-sm"
-                style={{
-                  backgroundColor: 'var(--input-bg)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-main)',
-                }}
-              />
-            </div>
-          </div>
-
-          {/* MERCHANT CAMERA & IMAGE UPLOAD SECTION */}
+          {/* 1. Product Photo (First and easiest on phone) */}
           <div
-            className="border border-dashed p-4 rounded-xl space-y-3"
+            className="border p-4 rounded-xl space-y-3"
             style={{
               backgroundColor: 'var(--surface-elevated)',
-              borderColor: 'var(--accent)',
+              borderColor: 'var(--border)',
             }}
           >
             <div className="flex items-center justify-between">
               <span
-                className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5"
-                style={{ color: 'var(--primary)' }}
+                className="text-xs font-semibold flex items-center gap-1.5"
+                style={{ color: 'var(--text-main)' }}
               >
-                <Camera className="w-4 h-4" style={{ color: 'var(--accent)' }} />
-                <span>Product Photo & Instant Camera</span>
+                <Camera className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+                <span>Product Photo *</span>
               </span>
               <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                JPEG · PNG · WebP
+                Phone Gallery or Camera
               </span>
             </div>
 
             {isCameraActive ? (
-              <div className="space-y-3 bg-black/90 p-4 rounded-xl text-white">
+              <div className="space-y-3 bg-black/90 p-3.5 rounded-xl text-white">
                 <div className="relative rounded-lg overflow-hidden bg-black aspect-video flex items-center justify-center border border-white/20">
                   <video
                     ref={videoRef}
@@ -523,8 +457,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                     muted
                     className="w-full h-full object-cover"
                   />
-                  <div className="absolute top-2 left-2 px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold">
-                    CAMERA ACTIVE
+                  <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold">
+                    Camera Ready
                   </div>
                 </div>
 
@@ -532,7 +466,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                   <button
                     type="button"
                     onClick={stopCameraStream}
-                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs transition-colors cursor-pointer"
+                    className="px-3.5 py-2 bg-white/15 hover:bg-white/25 text-white rounded-lg text-xs font-medium cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -540,11 +474,11 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                   <button
                     type="button"
                     onClick={handleCapturePhoto}
-                    className="px-5 py-2 text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 shadow-lg cursor-pointer"
+                    className="px-5 py-2.5 text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 shadow-lg cursor-pointer"
                     style={{ backgroundColor: 'var(--accent)' }}
                   >
                     <Camera className="w-4 h-4" />
-                    <span>Snap Photo</span>
+                    <span>Take Photo</span>
                   </button>
                 </div>
               </div>
@@ -561,49 +495,50 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                     <img
                       src={previewUrl || imageUrl}
                       alt="Product preview"
+                      referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"
                     />
                   ) : (
                     <div className="text-center p-2" style={{ color: 'var(--text-muted)' }}>
                       <ImageIcon className="w-7 h-7 mx-auto mb-1 opacity-50" />
-                      <span className="text-[10px] block">No Image</span>
+                      <span className="text-[10px] block">No Photo</span>
                     </div>
                   )}
                 </div>
 
-                <div className="flex-1 w-full space-y-2">
+                <div className="flex-1 w-full space-y-2.5">
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={handleStartCamera}
-                      className="px-3 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-opacity hover:opacity-95 cursor-pointer"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3.5 py-2.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-opacity hover:opacity-95 cursor-pointer"
                       style={{
                         backgroundColor: 'var(--primary)',
                         color: 'var(--btn-text)',
                       }}
                     >
-                      <Camera className="w-4 h-4" />
-                      <span>Use Camera / Webcam</span>
+                      <UploadCloud className="w-4 h-4" />
+                      <span>Upload Photo</span>
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-3 py-2 border text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      onClick={handleStartCamera}
+                      className="px-3.5 py-2.5 border text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
                       style={{
                         backgroundColor: 'var(--surface)',
                         borderColor: 'var(--border)',
                         color: 'var(--text-main)',
                       }}
                     >
-                      <UploadCloud className="w-4 h-4" />
-                      <span>Choose File</span>
+                      <Camera className="w-4 h-4" />
+                      <span>Take Photo</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => mobileCameraInputRef.current?.click()}
-                      className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer sm:hidden"
+                      className="px-3.5 py-2.5 border text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer sm:hidden"
                       style={{
                         backgroundColor: 'var(--surface)',
                         borderColor: 'var(--border)',
@@ -611,47 +546,68 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                       }}
                     >
                       <Video className="w-4 h-4" />
-                      <span>Direct Capture</span>
+                      <span>Phone Camera</span>
                     </button>
                   </div>
-
-                  <p className="text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
-                    Accepts <strong style={{ color: 'var(--text-main)' }}>JPEG, PNG, or WebP</strong> up
-                    to 5MB.
-                  </p>
 
                   {imageFile && (
                     <div
                       className="flex items-center gap-1.5 text-xs font-medium"
                       style={{ color: 'var(--success-text)' }}
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate max-w-[220px]">{imageFile.name}</span>
-                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        ({Math.round(imageFile.size / 1024)} KB)
-                      </span>
                     </div>
                   )}
+
+                  <div>
+                    <label
+                      htmlFor="product-image-url"
+                      className="block text-[11px] mb-1"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      Or paste an image link (optional):
+                    </label>
+                    <input
+                      id="product-image-url"
+                      type="url"
+                      placeholder="https://..."
+                      value={imageUrl.startsWith('data:') ? '' : imageUrl}
+                      onChange={(e) => {
+                        setImageUrl(e.target.value);
+                        if (!imageFile) setPreviewUrl(e.target.value);
+                      }}
+                      className="w-full p-2 rounded-lg border text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             )}
+          </div>
 
-            <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+          {/* 2. Product Name & Category */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
               <label
-                className="block text-[11px] font-semibold mb-1"
-                style={{ color: 'var(--text-muted)' }}
+                htmlFor="product-name-input"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: 'var(--text-main)' }}
               >
-                Or paste hosted Image URL:
+                Product Name *
               </label>
               <input
-                type="url"
-                placeholder="https://images.unsplash.com/..."
-                value={imageUrl}
-                onChange={(e) => {
-                  setImageUrl(e.target.value);
-                  if (!imageFile) setPreviewUrl(e.target.value);
-                }}
-                className="w-full p-2 rounded-lg border text-xs"
+                id="product-name-input"
+                type="text"
+                required
+                placeholder="e.g. Begum Zari Chanderi Kurta Set"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full p-2.5 rounded-lg border text-sm"
                 style={{
                   backgroundColor: 'var(--input-bg)',
                   borderColor: 'var(--border)',
@@ -659,11 +615,275 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 }}
               />
             </div>
+
+            <div>
+              <label
+                htmlFor="product-category-select"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Category *
+              </label>
+              <select
+                id="product-category-select"
+                value={category}
+                onChange={(e) => {
+                  const nextCat = e.target.value;
+                  setCategory(nextCat);
+                  if (nextCat === 'Sarees') {
+                    setSizes(['Free Size']);
+                  } else if (sizes.length === 1 && sizes[0] === 'Free Size') {
+                    setSizes(['S', 'M', 'L', 'XL']);
+                  }
+                }}
+                className="w-full p-2.5 rounded-lg border text-sm"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
+              >
+                <option value="Kurtis">Kurtis</option>
+                <option value="Sarees">Sarees</option>
+                <option value="Suits">Suit Sets</option>
+                <option value="Festive">Festive Wear</option>
+                <option value="Everyday">Everyday Wear</option>
+              </select>
+            </div>
+          </div>
+
+          {/* 3. Price & Optional Sale Price */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor="product-price-input"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Price (₹) *
+              </label>
+              <input
+                id="product-price-input"
+                type="number"
+                required
+                min={1}
+                placeholder="e.g. 1899"
+                value={regularPrice}
+                onChange={(e) => setRegularPrice(e.target.value)}
+                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
+              />
+              <span className="text-[11px] block mt-1" style={{ color: 'var(--text-muted)' }}>
+                Regular selling price in ₹
+              </span>
+            </div>
+
+            <div>
+              <label
+                htmlFor="product-sale-price-input"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Sale Price (₹, Optional)
+              </label>
+              <input
+                id="product-sale-price-input"
+                type="number"
+                min={1}
+                placeholder="e.g. 1499 (leave blank if not on sale)"
+                value={salePrice}
+                onChange={(e) => setSalePrice(e.target.value)}
+                className="w-full p-2.5 rounded-lg border text-sm tabular-nums"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
+              />
+              {isSaleActive ? (
+                <span
+                  className="text-[11px] font-medium block mt-1"
+                  style={{ color: 'var(--success-text)' }}
+                >
+                  Customer pays {formatINR(parsedSale)} ({formatINR(parsedRegular)} crossed out)
+                </span>
+              ) : (
+                <span className="text-[11px] block mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Enter a lower price if this outfit is on discount
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* 4. Description & Fabric */}
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="product-description-input"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Description (Optional)
+              </label>
+              <textarea
+                id="product-description-input"
+                rows={2}
+                placeholder="e.g. Comfortable festive kurta with delicate zari embroidery and matching dupatta."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full p-2.5 rounded-lg border text-sm leading-relaxed"
+                style={{
+                  backgroundColor: 'var(--input-bg)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="product-fabric-input"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Fabric / Material
+                </label>
+                <input
+                  id="product-fabric-input"
+                  type="text"
+                  placeholder="e.g. Pure Mulmul Cotton, Chanderi Silk"
+                  value={fabric}
+                  onChange={(e) => setFabric(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border text-sm"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="product-tag-select"
+                  className="block text-xs font-semibold mb-1"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Product Label
+                </label>
+                <select
+                  id="product-tag-select"
+                  value={TAG_OPTIONS.includes(tag) ? tag : 'NEW'}
+                  onChange={(e) => setTag(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border text-sm"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                >
+                  {TAG_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* 5. Available Sizes & Stock Quantity */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+            <div>
+              <span
+                className="block text-xs font-semibold mb-1.5"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Available Sizes
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {SIZE_OPTIONS.map((size) => {
+                  const selected = sizes.includes(size);
+                  return (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => toggleSize(size)}
+                      className="px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer"
+                      style={{
+                        backgroundColor: selected ? 'var(--primary)' : 'var(--input-bg)',
+                        color: selected ? 'var(--btn-text)' : 'var(--text-main)',
+                        borderColor: selected ? 'var(--primary)' : 'var(--border)',
+                      }}
+                    >
+                      {size}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="product-stock-input"
+                className="block text-xs font-semibold mb-1.5"
+                style={{ color: 'var(--text-main)' }}
+              >
+                Quantity Available in Stock *
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setStock(String(Math.max(0, (Number(stock) || 0) - 1)))}
+                  aria-label="Decrease stock quantity"
+                  className="w-10 h-10 rounded-lg border flex items-center justify-center cursor-pointer shrink-0"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                >
+                  <Minus className="w-4 h-4" />
+                </button>
+                <input
+                  id="product-stock-input"
+                  type="number"
+                  required
+                  min={0}
+                  value={stock}
+                  onChange={(e) => setStock(e.target.value)}
+                  className="w-24 p-2 rounded-lg border text-center text-sm font-semibold tabular-nums"
+                  style={{
+                    backgroundColor: 'var(--input-bg)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setStock(String((Number(stock) || 0) + 1))}
+                  aria-label="Increase stock quantity"
+                  className="w-10 h-10 rounded-lg border flex items-center justify-center cursor-pointer shrink-0"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Action Buttons */}
           <div
-            className="flex justify-end gap-3 pt-4 border-t"
+            className="flex items-center justify-end gap-3 pt-4 border-t"
             style={{ borderColor: 'var(--border)' }}
           >
             <button
@@ -672,7 +892,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 stopCameraStream();
                 onClose();
               }}
-              className="px-4 py-2 border rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              className="px-4 py-2.5 border rounded-lg text-xs font-semibold transition-colors cursor-pointer"
               style={{
                 backgroundColor: 'var(--surface)',
                 borderColor: 'var(--border)',
@@ -684,7 +904,7 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             <button
               type="submit"
               disabled={isUploading || isSaving}
-              className="px-6 py-2.5 text-xs font-semibold tracking-wider uppercase rounded-lg transition-opacity hover:opacity-95 flex items-center gap-2 shadow cursor-pointer disabled:opacity-50"
+              className="px-6 py-2.5 text-xs font-semibold rounded-lg transition-opacity hover:opacity-95 flex items-center gap-2 shadow cursor-pointer disabled:opacity-50"
               style={{
                 backgroundColor: 'var(--primary)',
                 color: 'var(--btn-text)',
@@ -692,7 +912,13 @@ export const ProductModal: React.FC<ProductModalProps> = ({
             >
               {(isUploading || isSaving) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               <span>
-                {isUploading ? 'Uploading Image...' : isSaving ? 'Saving...' : 'Save Product'}
+                {isUploading
+                  ? 'Uploading Photo...'
+                  : isSaving
+                  ? 'Saving...'
+                  : isEditing
+                  ? 'Save Changes'
+                  : 'Save Product'}
               </span>
             </button>
           </div>

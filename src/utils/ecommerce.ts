@@ -4,6 +4,8 @@ export interface Product {
   category: 'Kurtis' | 'Sarees' | 'Suits' | 'Festive' | string;
   price: number;
   old_price?: number;
+  description?: string;
+  sizes?: string[];
   stock: number;
   image_url: string;
   tag?: string;
@@ -1191,7 +1193,7 @@ export const initialProducts: Product[] = [
     price: 1199,
     old_price: 1499,
     stock: 5,
-    image_url: 'https://images.unsplash.com/photo-1583391733975-04535df2b378?auto=format&fit=crop&w=800&q=80',
+    image_url: 'https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&w=800&q=80',
     tag: 'HAND PICKED',
     fabric: 'Rayon flex with hand zardozi yoke',
     created_at: new Date(Date.now() - 86400000 * 1).toISOString(),
@@ -1203,7 +1205,7 @@ export const initialProducts: Product[] = [
     price: 3999,
     old_price: 4599,
     stock: 3,
-    image_url: 'https://images.unsplash.com/photo-1610030469668-932d0c242e88?auto=format&fit=crop&w=800&q=80',
+    image_url: 'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=800&q=80',
     tag: 'OCCASION',
     fabric: 'Micro velvet with intricate tilla work',
     created_at: new Date(Date.now() - 86400000 * 1).toISOString(),
@@ -1215,7 +1217,7 @@ export const initialProducts: Product[] = [
     price: 1799,
     old_price: 2099,
     stock: 9,
-    image_url: 'https://images.unsplash.com/photo-1596461404969-9ae70f2830c1?auto=format&fit=crop&w=800&q=80',
+    image_url: 'https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=800&q=80',
     tag: 'JUST IN',
     fabric: 'Jaipuri Hand-block Kota Doria with running blouse',
     created_at: new Date().toISOString(),
@@ -1227,12 +1229,44 @@ export const initialProducts: Product[] = [
     price: 1399,
     old_price: 1699,
     stock: 10,
-    image_url: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80',
+    image_url: 'https://images.unsplash.com/photo-1609357605129-26f69add5d6e?auto=format&fit=crop&w=800&q=80',
     tag: 'EASY ELEGANCE',
     fabric: 'Slub cotton with floral printed malmal dupatta',
     created_at: new Date().toISOString(),
   },
 ];
+
+const STALE_PRODUCT_PHOTO_IDS = [
+  'photo-1610030469668-932d0c242e88',
+  'photo-1596461404969-9ae70f2830c1',
+  'photo-1584917865442-de89df76afd3',
+  'photo-1583391733975-04535df2b378',
+  'photo-1595777457583-95e059d581b8',
+  'photo-1610030469983-98e550d6193c',
+];
+
+export function resolveSafeProductImage(product?: {
+  id?: string;
+  category?: string;
+  image_url?: string;
+} | null): string {
+  const raw = (product?.image_url || '').trim();
+  const isStale = STALE_PRODUCT_PHOTO_IDS.some((id) => raw.includes(id));
+  if (raw && !isStale) {
+    return raw;
+  }
+  const cat = (product?.category || '').toLowerCase();
+  if (cat === 'sarees') {
+    return 'https://images.unsplash.com/photo-1617627143750-d86bc21e42bb?auto=format&fit=crop&w=800&q=80';
+  }
+  if (cat === 'suits') {
+    return 'https://images.unsplash.com/photo-1609357605129-26f69add5d6e?auto=format&fit=crop&w=800&q=80';
+  }
+  if (cat === 'festive') {
+    return 'https://images.unsplash.com/photo-1617627143750-d86bc21e42bb?auto=format&fit=crop&w=800&q=80';
+  }
+  return 'https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&w=800&q=80';
+}
 
 export const initialOrders: Order[] = [
   {

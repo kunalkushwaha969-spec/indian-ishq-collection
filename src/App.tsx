@@ -141,12 +141,19 @@ export default function App() {
     try {
       const savedId =
         localStorage.getItem(THEME_STORAGE_KEY) ||
-        localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
+        localStorage.getItem(LEGACY_THEME_STORAGE_KEY) ||
+        storeSettings.themeId;
       return resolveThemeById(savedId);
     } catch {
       return COORDINATED_THEMES[0];
     }
   });
+
+  useEffect(() => {
+    if (storeSettings.themeId) {
+      setActiveTheme(resolveThemeById(storeSettings.themeId));
+    }
+  }, [storeSettings.themeId]);
 
   // 2. Appearance Mode State (Manual Override vs System Preference)
   const [manualAppearance, setManualAppearance] = useState<'light' | 'dark' | null>(() => {
