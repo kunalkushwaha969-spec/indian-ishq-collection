@@ -1565,8 +1565,14 @@ export interface ManagedUserAccount {
   approved_by?: string;
 }
 
-export const INITIAL_OWNER_UID = 'VrLNKE3naCXN34GDog4tejrwPO13';
+export const INITIAL_OWNER_UID = 'VrLNKE3naCXN34GDog4tejrwpO13';
+export const INITIAL_OWNER_UID_ALT = 'VrLNKE3naCXN34GDog4tejrwPO13';
 export const INITIAL_OWNER_EMAIL = 'kunalkushwaha969@gmail.com';
+
+export function isInitialOwnerUid(uid?: string | null): boolean {
+  if (!uid) return false;
+  return uid === INITIAL_OWNER_UID || uid === INITIAL_OWNER_UID_ALT;
+}
 
 export const UNAUTHORIZED_MERCHANT_MESSAGE =
   'Account created, but merchant access has not been granted. Your registration is now pending approval in the store Admin User Management panel.';
@@ -1582,7 +1588,7 @@ export function isValidEmailFormat(email: string): boolean {
 
 /**
  * Pure helper to resolve a user's effective website role ('admin' | 'merchant' | null).
- * - Verified initial owner (matching BOTH immutable UID VrLNKE3naCXN34GDog4tejrwPO13 and verified email)
+ * - Verified initial owner (matching BOTH immutable UID VrLNKE3naCXN34GDog4tejrwpO13 / VrLNKE3naCXN34GDog4tejrwPO13 and verified email)
  *   retains 'admin' unless explicitly self-revoked ('revoked' by initial owner).
  * - Approved accounts in /admins/{uid} receive 'admin' or 'merchant' (or null if 'revoked').
  */
@@ -1596,11 +1602,13 @@ export function resolveEffectiveMerchantRole(params: {
   initialOwnerUid?: string;
 }): 'admin' | 'merchant' | null {
   const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
-  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
   const normalizedEmail = (params.email || '').trim().toLowerCase();
+  const isOwnerUid = params.initialOwnerUid
+    ? params.uid === params.initialOwnerUid
+    : isInitialOwnerUid(params.uid);
   const isVerifiedInitialOwner = Boolean(
     params.uid &&
-    params.uid === ownerUid &&
+    isOwnerUid &&
     normalizedEmail &&
     normalizedEmail === ownerEmail &&
     params.emailVerified === true
@@ -1613,7 +1621,9 @@ export function resolveEffectiveMerchantRole(params: {
         : ownerEmail;
     if (
       params.adminDocRole === 'revoked' &&
-      (approvedByNormalized === ownerEmail || approvedByNormalized === ownerUid.toLowerCase())
+      (approvedByNormalized === ownerEmail ||
+        approvedByNormalized === INITIAL_OWNER_UID.toLowerCase() ||
+        approvedByNormalized === INITIAL_OWNER_UID_ALT.toLowerCase())
     ) {
       return null;
     }
@@ -1649,7 +1659,6 @@ export function buildManagedUserAccounts(params: {
   } | null;
 }): ManagedUserAccount[] {
   const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
-  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
   const byUid = new Map<
     string,
     {
@@ -1688,8 +1697,11 @@ export function buildManagedUserAccounts(params: {
     const email = (entry.admin?.email || entry.reg?.email || '').trim();
     const displayName = (entry.reg?.displayName || entry.admin?.displayName || '').trim();
     const provider = entry.reg?.provider || 'password';
+    const isOwnerUid = params.initialOwnerUid
+      ? uid === params.initialOwnerUid
+      : isInitialOwnerUid(uid);
     const isInitialOwner = Boolean(
-      uid === ownerUid &&
+      isOwnerUid &&
       email.toLowerCase() === ownerEmail
     );
 
@@ -1701,7 +1713,7 @@ export function buildManagedUserAccounts(params: {
         entry.admin?.role === 'revoked' &&
         (!entry.admin.approved_by ||
           entry.admin.approved_by.trim().toLowerCase() === ownerEmail ||
-          entry.admin.approved_by.trim() === ownerUid);
+          isInitialOwnerUid(entry.admin.approved_by.trim()));
       if (selfRevoked) {
         status = 'revoked';
         role = null;
@@ -1786,10 +1798,9 @@ export function validateRoleChangeSafety(params: {
   }
 
   const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
-  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
   const normalizedActorEmail = (params.actorEmail || '').trim().toLowerCase();
   const isActorInitialOwner = Boolean(
-    params.actorUid === ownerUid &&
+    (params.initialOwnerUid ? params.actorUid === params.initialOwnerUid : isInitialOwnerUid(params.actorUid)) &&
     normalizedActorEmail &&
     normalizedActorEmail === ownerEmail
   );
@@ -1799,7 +1810,7 @@ export function validateRoleChangeSafety(params: {
     .trim()
     .toLowerCase();
   const isTargetInitialOwner =
-    params.targetUid === ownerUid ||
+    (params.initialOwnerUid ? params.targetUid === params.initialOwnerUid : isInitialOwnerUid(params.targetUid)) ||
     Boolean(targetAccount?.isInitialOwner) ||
     (Boolean(normalizedTargetEmail) && normalizedTargetEmail === ownerEmail);
 
@@ -1830,7 +1841,7 @@ export function validateRoleChangeSafety(params: {
     const otherActiveAdmins = params.accounts.filter(
       (a) =>
         a.uid !== params.targetUid &&
-        a.uid !== ownerUid &&
+        !isInitialOwnerUid(a.uid) &&
         a.status === 'admin' &&
         (!isTargetInitialOwner ||
           (!a.isInitialOwner && a.email.trim().toLowerCase() !== ownerEmail))
@@ -1864,17 +1875,16 @@ export function canInitialOwnerHandover(params: {
   reason?: string;
 } {
   const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
-  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
   const normalizedEmail = (params.currentUserEmail || '').trim().toLowerCase();
   const isCurrentUserInitialOwner = Boolean(
-    params.currentUserUid === ownerUid &&
+    (params.initialOwnerUid ? params.currentUserUid === params.initialOwnerUid : isInitialOwnerUid(params.currentUserUid)) &&
     normalizedEmail &&
     normalizedEmail === ownerEmail
   );
 
   const activeOtherAdmins = params.accounts.filter(
     (a) =>
-      a.uid !== ownerUid &&
+      !isInitialOwnerUid(a.uid) &&
       a.uid !== params.currentUserUid &&
       a.status === 'admin' &&
       !a.isInitialOwner &&

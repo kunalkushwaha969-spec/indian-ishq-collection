@@ -4,7 +4,7 @@ service cloud.firestore {
 
     function isInitialOwnerAuth() {
       return request.auth != null
-        && request.auth.uid == 'VrLNKE3naCXN34GDog4tejrwPO13'
+        && request.auth.uid in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13']
         && 'email' in request.auth.token
         && request.auth.token.email is string
         && request.auth.token.email.lower() == 'kunalkushwaha969@gmail.com'
@@ -15,10 +15,16 @@ service cloud.firestore {
     function isInitialOwner() {
       return isInitialOwnerAuth()
         && (
-          !exists(/databases/$(database)/documents/admins/VrLNKE3naCXN34GDog4tejrwPO13) ||
+          !exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
           !(
-            get(/databases/$(database)/documents/admins/VrLNKE3naCXN34GDog4tejrwPO13).data.role == 'revoked'
-            && get(/databases/$(database)/documents/admins/VrLNKE3naCXN34GDog4tejrwPO13).data.approved_by in ['kunalkushwaha969@gmail.com', 'VrLNKE3naCXN34GDog4tejrwPO13']
+            get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'revoked'
+            && (
+              get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.approved_by in [
+                'kunalkushwaha969@gmail.com',
+                'VrLNKE3naCXN34GDog4tejrwpO13',
+                'VrLNKE3naCXN34GDog4tejrwPO13'
+              ]
+            )
           )
         );
     }
@@ -51,7 +57,7 @@ service cloud.firestore {
     }
 
     function isTargetInitialOwnerRecord(adminUid) {
-      return adminUid == 'VrLNKE3naCXN34GDog4tejrwPO13'
+      return adminUid in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13']
         || (resource != null && 'email' in resource.data && resource.data.email is string && resource.data.email.lower() == 'kunalkushwaha969@gmail.com')
         || (request.resource != null && 'email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.lower() == 'kunalkushwaha969@gmail.com');
     }
@@ -61,7 +67,7 @@ service cloud.firestore {
         && data.handover_to_uid is string
         && data.handover_to_uid.size() > 0
         && data.handover_to_uid.size() <= 128
-        && data.handover_to_uid != 'VrLNKE3naCXN34GDog4tejrwPO13'
+        && !(data.handover_to_uid in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13'])
         && exists(/databases/$(database)/documents/admins/$(data.handover_to_uid))
         && get(/databases/$(database)/documents/admins/$(data.handover_to_uid)).data.role == 'admin';
     }
@@ -91,8 +97,8 @@ service cloud.firestore {
         && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
         && (!('created_at' in data) || (data.created_at is string && data.created_at.size() <= 64))
         && (!('updated_at' in data) || (data.updated_at is string && data.updated_at.size() <= 64))
-        && (data.email.lower() != 'kunalkushwaha969@gmail.com' || userUid == 'VrLNKE3naCXN34GDog4tejrwPO13')
-        && (userUid != 'VrLNKE3naCXN34GDog4tejrwPO13' || request.auth.token.email_verified == true);
+        && (data.email.lower() != 'kunalkushwaha969@gmail.com' || userUid in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13'])
+        && (!(userUid in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13']) || request.auth.token.email_verified == true);
     }
 
     function isValidProduct(data) {
@@ -127,7 +133,7 @@ service cloud.firestore {
     // Admins lookup collection:
     // Each document ID must equal the Firebase Authentication UID and contain role: "admin", "merchant", or "revoked".
     // Only full Admins can list or modify /admins.
-    // The Initial Owner (UID: VrLNKE3naCXN34GDog4tejrwPO13) is protected directly by UID:
+    // The Initial Owner (UID: VrLNKE3naCXN34GDog4tejrwpO13 / VrLNKE3naCXN34GDog4tejrwPO13) is protected directly by UID:
     // Non-owner administrators can NEVER create, overwrite, demote, revoke, or delete the initial owner's admin record.
     // Non-initial-owner Admins cannot demote or delete their own UID. Initial-owner self-revocation requires a verified replacement Admin.
     match /admins/{adminUid} {
@@ -137,24 +143,27 @@ service cloud.firestore {
         && isValidAdminRecord(request.resource.data, adminUid)
         && (
           !isTargetInitialOwnerRecord(adminUid)
-          || (isInitialOwnerAuth() && request.auth.uid == 'VrLNKE3naCXN34GDog4tejrwPO13' && adminUid == 'VrLNKE3naCXN34GDog4tejrwPO13')
+          || (isInitialOwnerAuth() && request.auth.uid == adminUid)
         )
         && (
           request.auth.uid != adminUid
           || request.resource.data.role == 'admin'
           || (
             isInitialOwnerAuth()
-            && adminUid == 'VrLNKE3naCXN34GDog4tejrwPO13'
+            && request.auth.uid == adminUid
             && request.resource.data.role == 'revoked'
             && 'email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.lower() == 'kunalkushwaha969@gmail.com'
-            && 'approved_by' in request.resource.data && request.resource.data.approved_by is string && (request.resource.data.approved_by.lower() == 'kunalkushwaha969@gmail.com' || request.resource.data.approved_by == 'VrLNKE3naCXN34GDog4tejrwPO13')
+            && 'approved_by' in request.resource.data && request.resource.data.approved_by is string && (
+              request.resource.data.approved_by.lower() == 'kunalkushwaha969@gmail.com'
+              || request.resource.data.approved_by in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13']
+            )
             && hasVerifiedReplacementAdmin(request.resource.data)
           )
         );
       allow delete: if isFullAdmin()
         && request.auth.uid != adminUid
         && !isTargetInitialOwnerRecord(adminUid)
-        && adminUid != 'VrLNKE3naCXN34GDog4tejrwPO13';
+        && !(adminUid in ['VrLNKE3naCXN34GDog4tejrwpO13', 'VrLNKE3naCXN34GDog4tejrwPO13']);
     }
 
     // Registered users directory:

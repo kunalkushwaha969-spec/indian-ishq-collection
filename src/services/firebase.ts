@@ -47,6 +47,9 @@ import {
   resolveSafeProductImage,
   UNAUTHORIZED_MERCHANT_MESSAGE,
   REVOKED_MERCHANT_MESSAGE,
+  INITIAL_OWNER_UID,
+  INITIAL_OWNER_UID_ALT,
+  isInitialOwnerUid,
   resolveEffectiveMerchantRole,
   buildManagedUserAccounts,
   validateRoleChangeSafety,
@@ -97,7 +100,8 @@ try {
 export const db = dbInstance;
 export const auth = authInstance;
 
-export const AUTHORIZED_MERCHANT_UID = 'VrLNKE3naCXN34GDog4tejrwPO13';
+export const AUTHORIZED_MERCHANT_UID = INITIAL_OWNER_UID;
+export const AUTHORIZED_MERCHANT_UID_ALT = INITIAL_OWNER_UID_ALT;
 export const AUTHORIZED_MERCHANT_EMAIL = 'kunalkushwaha969@gmail.com';
 
 export function handleFirestoreError(
@@ -255,7 +259,7 @@ export async function getMerchantAccountState(user: User | null): Promise<{
   }
 
   const isInitialOwner = Boolean(
-    user.uid === AUTHORIZED_MERCHANT_UID &&
+    isInitialOwnerUid(user.uid) &&
     user.email &&
     user.email.toLowerCase() === AUTHORIZED_MERCHANT_EMAIL.toLowerCase()
   );
@@ -267,7 +271,6 @@ export async function getMerchantAccountState(user: User | null): Promise<{
     adminDocRole,
     adminDocApprovedBy,
     initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
-    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
   });
 
   if (resolvedRole === 'admin') {
@@ -619,7 +622,6 @@ export async function fetchManagedUserAccounts(): Promise<ManagedUserAccount[]> 
     registeredUsers: Array.from(registeredMap.values()),
     adminDocs: Array.from(adminMap.values()),
     initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
-    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
     currentUser: currentUser
       ? {
           uid: currentUser.uid,
@@ -658,7 +660,6 @@ export async function assignUserMerchantRole(params: {
     nextStatus: params.nextStatus,
     accounts: currentAccounts,
     initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
-    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
   });
 
   if (!safety.allowed) {
@@ -708,7 +709,6 @@ export async function revokeOwnInitialOwnerAccess(): Promise<void> {
     currentUserEmail: currentUser.email,
     accounts: currentAccounts,
     initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
-    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
   });
 
   if (!handoverCheck.isCurrentUserInitialOwner) {

@@ -80,7 +80,7 @@
     },
     "AdminUser": {
       "title": "AdminUser",
-      "description": "Authorized store owner, admin, merchant, or revoked access record in the admins collection keyed by Firebase Authentication UID. The initial owner (UID: VrLNKE3naCXN34GDog4tejrwPO13, email: kunalkushwaha969@gmail.com) is immutable and cannot be demoted or deleted by other admins.",
+      "description": "Authorized store owner, admin, merchant, or revoked access record in the admins collection keyed by Firebase Authentication UID. The initial owner (UID: VrLNKE3naCXN34GDog4tejrwpO13 / VrLNKE3naCXN34GDog4tejrwPO13, email: kunalkushwaha969@gmail.com) is immutable and cannot be demoted or deleted by other admins.",
       "type": "object",
       "properties": {
         "uid": {

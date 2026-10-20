@@ -6,6 +6,7 @@ import type {
 import {
   INITIAL_OWNER_EMAIL,
   INITIAL_OWNER_UID,
+  isInitialOwnerUid,
   canInitialOwnerHandover,
   formatMerchantAuthError,
 } from '../utils/ecommerce';
@@ -58,7 +59,7 @@ export const UserManagementPanel: React.FC<UserManagementPanelProps> = ({
   const currentEmail = currentUser?.email || '';
   const isInitialOwner =
     Boolean(currentEmail && currentUid) &&
-    currentUid === INITIAL_OWNER_UID &&
+    isInitialOwnerUid(currentUid) &&
     currentEmail.toLowerCase() === INITIAL_OWNER_EMAIL.toLowerCase();
   const hasPasswordProvider = Boolean(
     currentUser?.providerData?.some((p) => p.providerId === 'password')
