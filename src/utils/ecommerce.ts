@@ -980,6 +980,47 @@ export function getActiveHeroSlides(
   ];
 }
 
+export const MAX_FREE_SHIPPING_THRESHOLD = 100000;
+export const MAX_STANDARD_SHIPPING_FEE = 10000;
+
+/**
+ * Validates Merchant Store Settings rupee fields (free delivery threshold and standard delivery fee).
+ * Allows valid whole-rupee amounts (e.g., 0, 99, 499, 999, 1999, 2499) while rejecting negative or out-of-range values.
+ */
+export function validateStoreSettingsAmounts(settings: {
+  freeShippingThreshold?: number;
+  standardShippingFee?: number;
+}): { valid: boolean; error?: string } {
+  const threshold = settings.freeShippingThreshold ?? 1999;
+  const fee = settings.standardShippingFee ?? 99;
+
+  if (
+    typeof threshold !== 'number' ||
+    !Number.isFinite(threshold) ||
+    threshold < 0 ||
+    threshold > MAX_FREE_SHIPPING_THRESHOLD
+  ) {
+    return {
+      valid: false,
+      error: `Free delivery threshold must be between ₹0 and ₹${MAX_FREE_SHIPPING_THRESHOLD.toLocaleString('en-IN')}.`,
+    };
+  }
+
+  if (
+    typeof fee !== 'number' ||
+    !Number.isFinite(fee) ||
+    fee < 0 ||
+    fee > MAX_STANDARD_SHIPPING_FEE
+  ) {
+    return {
+      valid: false,
+      error: `Standard delivery fee must be between ₹0 and ₹${MAX_STANDARD_SHIPPING_FEE.toLocaleString('en-IN')}.`,
+    };
+  }
+
+  return { valid: true };
+}
+
 /**
  * Safely merges partial settings with existing/default settings so blank strings
  * never accidentally overwrite required store fields.
@@ -1172,14 +1213,16 @@ export function mergeAndSanitizeStoreSettings(
   const freeShippingThreshold =
     typeof incoming.freeShippingThreshold === 'number' &&
     Number.isFinite(incoming.freeShippingThreshold) &&
-    incoming.freeShippingThreshold >= 0
+    incoming.freeShippingThreshold >= 0 &&
+    incoming.freeShippingThreshold <= MAX_FREE_SHIPPING_THRESHOLD
       ? Math.round(incoming.freeShippingThreshold)
       : fallback.freeShippingThreshold ?? 1999;
 
   const standardShippingFee =
     typeof incoming.standardShippingFee === 'number' &&
     Number.isFinite(incoming.standardShippingFee) &&
-    incoming.standardShippingFee >= 0
+    incoming.standardShippingFee >= 0 &&
+    incoming.standardShippingFee <= MAX_STANDARD_SHIPPING_FEE
       ? Math.round(incoming.standardShippingFee)
       : fallback.standardShippingFee ?? 99;
 

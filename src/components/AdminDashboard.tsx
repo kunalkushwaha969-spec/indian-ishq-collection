@@ -33,6 +33,9 @@ import {
   validateIndianWhatsAppNumber,
   buildWhatsAppLink,
   buildCustomerOrderWhatsAppMessage,
+  validateStoreSettingsAmounts,
+  MAX_FREE_SHIPPING_THRESHOLD,
+  MAX_STANDARD_SHIPPING_FEE,
 } from '../services/settings';
 import { useAnimatedMount } from '../utils/useAnimatedMount';
 import {
@@ -205,11 +208,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     customSettings?: StoreSettings
   ) => {
     if (e) e.preventDefault();
+    const target = customSettings || storeSettings;
+    const amountCheck = validateStoreSettingsAmounts(target);
+    if (!amountCheck.valid) {
+      setBanner({
+        type: 'error',
+        message: amountCheck.error || 'Please enter valid rupee amounts.',
+      });
+      return;
+    }
+
     setIsSavingSettings(true);
     setBanner(null);
 
     try {
-      const target = customSettings || storeSettings;
       const saved = await saveStoreSettings(target);
       setStoreSettings(saved);
       setSavedSettingsSnapshot(saved);
@@ -1484,6 +1496,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <input
                                   type="number"
                                   min={0}
+                                  max={100000}
+                                  step="1"
                                   aria-label={`Stock count for ${prod.name}`}
                                   value={prod.stock}
                                   onChange={(e) =>
@@ -1992,12 +2006,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           id="setting-free-shipping-threshold"
                           type="number"
                           min={0}
-                          step={50}
+                          max={MAX_FREE_SHIPPING_THRESHOLD}
+                          step="1"
                           value={storeSettings.freeShippingThreshold ?? 1999}
                           onChange={(e) =>
                             setStoreSettings({
                               ...storeSettings,
-                              freeShippingThreshold: Math.max(0, Number(e.target.value) || 0),
+                              freeShippingThreshold:
+                                e.target.value === '' ? 0 : Number(e.target.value),
                             })
                           }
                           className="w-full p-2.5 border rounded-lg text-xs tabular-nums"
@@ -2021,12 +2037,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           id="setting-standard-shipping-fee"
                           type="number"
                           min={0}
-                          step={10}
+                          max={MAX_STANDARD_SHIPPING_FEE}
+                          step="1"
                           value={storeSettings.standardShippingFee ?? 99}
                           onChange={(e) =>
                             setStoreSettings({
                               ...storeSettings,
-                              standardShippingFee: Math.max(0, Number(e.target.value) || 0),
+                              standardShippingFee:
+                                e.target.value === '' ? 0 : Number(e.target.value),
                             })
                           }
                           className="w-full p-2.5 border rounded-lg text-xs tabular-nums"

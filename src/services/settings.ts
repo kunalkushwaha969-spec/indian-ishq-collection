@@ -25,6 +25,9 @@ import {
   validateIndianWhatsAppNumber,
   buildWhatsAppLink,
   buildCustomerOrderWhatsAppMessage,
+  validateStoreSettingsAmounts,
+  MAX_FREE_SHIPPING_THRESHOLD,
+  MAX_STANDARD_SHIPPING_FEE,
   type WhatsAppValidationResult,
 } from '../utils/ecommerce';
 
@@ -51,6 +54,9 @@ export {
   validateIndianWhatsAppNumber,
   buildWhatsAppLink,
   buildCustomerOrderWhatsAppMessage,
+  validateStoreSettingsAmounts,
+  MAX_FREE_SHIPPING_THRESHOLD,
+  MAX_STANDARD_SHIPPING_FEE,
   type WhatsAppValidationResult,
 };
 
@@ -106,6 +112,11 @@ export async function saveStoreSettings(
 
   if (!db) {
     throw new Error('Firestore database is not initialized. Settings could not be saved.');
+  }
+
+  const amountValidation = validateStoreSettingsAmounts(settings);
+  if (!amountValidation.valid) {
+    throw new Error(amountValidation.error || 'Please enter valid rupee amounts for delivery charges.');
   }
 
   const currentSettings = getLocalStoreSettings();

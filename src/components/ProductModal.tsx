@@ -674,6 +674,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 type="number"
                 required
                 min={1}
+                max={1000000}
+                step="1"
                 placeholder="e.g. 1899"
                 value={regularPrice}
                 onChange={(e) => setRegularPrice(e.target.value)}
@@ -701,6 +703,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 id="product-sale-price-input"
                 type="number"
                 min={1}
+                max={1000000}
+                step="1"
                 placeholder="e.g. 1499 (leave blank if not on sale)"
                 value={salePrice}
                 onChange={(e) => setSalePrice(e.target.value)}
@@ -862,6 +866,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                   type="number"
                   required
                   min={0}
+                  max={100000}
+                  step="1"
                   value={stock}
                   onChange={(e) => setStock(e.target.value)}
                   className="w-24 p-2 rounded-lg border text-center text-sm font-semibold tabular-nums"

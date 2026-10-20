@@ -703,4 +703,68 @@ test('buildCustomerOrderWhatsAppMessage generates readable message with full ord
   assert.ok(msg.includes('+91 98765 43210'));
 });
 
+import {
+  validateStoreSettingsAmounts,
+  MAX_FREE_SHIPPING_THRESHOLD,
+  MAX_STANDARD_SHIPPING_FEE,
+} from './ecommerce.ts';
+
+test('validateStoreSettingsAmounts accepts valid rupee amounts (99, 499, 999, 1999, 2499) and rejects negative or out-of-range values', () => {
+  for (const amount of [0, 99, 499, 999, 1999, 2499, 4999]) {
+    const res = validateStoreSettingsAmounts({
+      freeShippingThreshold: amount,
+      standardShippingFee: Math.min(amount, MAX_STANDARD_SHIPPING_FEE),
+    });
+    assert.equal(res.valid, true, `Expected amount ₹${amount} to be valid`);
+  }
+
+  // Negative amounts rejected
+  assert.equal(
+    validateStoreSettingsAmounts({ freeShippingThreshold: -1, standardShippingFee: 99 }).valid,
+    false
+  );
+  assert.equal(
+    validateStoreSettingsAmounts({ freeShippingThreshold: 1999, standardShippingFee: -50 }).valid,
+    false
+  );
+
+  // Out-of-range amounts rejected
+  assert.equal(
+    validateStoreSettingsAmounts({
+      freeShippingThreshold: MAX_FREE_SHIPPING_THRESHOLD + 1,
+      standardShippingFee: 99,
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateStoreSettingsAmounts({
+      freeShippingThreshold: 1999,
+      standardShippingFee: MAX_STANDARD_SHIPPING_FEE + 1,
+    }).valid,
+    false
+  );
+});
+
+test('mergeAndSanitizeStoreSettings preserves exact rupee amounts such as 99, 499, 999, 1999, and 2499', () => {
+  const s1 = mergeAndSanitizeStoreSettings({
+    freeShippingThreshold: 1999,
+    standardShippingFee: 99,
+  });
+  assert.equal(s1.freeShippingThreshold, 1999);
+  assert.equal(s1.standardShippingFee, 99);
+
+  const s2 = mergeAndSanitizeStoreSettings({
+    freeShippingThreshold: 2499,
+    standardShippingFee: 499,
+  });
+  assert.equal(s2.freeShippingThreshold, 2499);
+  assert.equal(s2.standardShippingFee, 499);
+
+  const s3 = mergeAndSanitizeStoreSettings({
+    freeShippingThreshold: 999,
+    standardShippingFee: 0,
+  });
+  assert.equal(s3.freeShippingThreshold, 999);
+  assert.equal(s3.standardShippingFee, 0);
+});
 
