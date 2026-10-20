@@ -48,7 +48,6 @@ import {
   UNAUTHORIZED_MERCHANT_MESSAGE,
   REVOKED_MERCHANT_MESSAGE,
   INITIAL_OWNER_UID,
-  INITIAL_OWNER_UID_ALT,
   isInitialOwnerUid,
   resolveEffectiveMerchantRole,
   buildManagedUserAccounts,
@@ -101,7 +100,6 @@ export const db = dbInstance;
 export const auth = authInstance;
 
 export const AUTHORIZED_MERCHANT_UID = INITIAL_OWNER_UID;
-export const AUTHORIZED_MERCHANT_UID_ALT = INITIAL_OWNER_UID_ALT;
 export const AUTHORIZED_MERCHANT_EMAIL = 'kunalkushwaha969@gmail.com';
 
 export function handleFirestoreError(

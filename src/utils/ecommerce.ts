@@ -1566,12 +1566,11 @@ export interface ManagedUserAccount {
 }
 
 export const INITIAL_OWNER_UID = 'VrLNKE3naCXN34GDog4tejrwpO13';
-export const INITIAL_OWNER_UID_ALT = 'VrLNKE3naCXN34GDog4tejrwPO13';
 export const INITIAL_OWNER_EMAIL = 'kunalkushwaha969@gmail.com';
 
 export function isInitialOwnerUid(uid?: string | null): boolean {
   if (!uid) return false;
-  return uid === INITIAL_OWNER_UID || uid === INITIAL_OWNER_UID_ALT;
+  return uid === INITIAL_OWNER_UID;
 }
 
 export const UNAUTHORIZED_MERCHANT_MESSAGE =
@@ -1588,7 +1587,7 @@ export function isValidEmailFormat(email: string): boolean {
 
 /**
  * Pure helper to resolve a user's effective website role ('admin' | 'merchant' | null).
- * - Verified initial owner (matching BOTH immutable UID VrLNKE3naCXN34GDog4tejrwpO13 / VrLNKE3naCXN34GDog4tejrwPO13 and verified email)
+ * - Verified initial owner (matching BOTH immutable UID VrLNKE3naCXN34GDog4tejrwpO13 and verified email)
  *   retains 'admin' unless explicitly self-revoked ('revoked' by initial owner).
  * - Approved accounts in /admins/{uid} receive 'admin' or 'merchant' (or null if 'revoked').
  */
@@ -1622,8 +1621,7 @@ export function resolveEffectiveMerchantRole(params: {
     if (
       params.adminDocRole === 'revoked' &&
       (approvedByNormalized === ownerEmail ||
-        approvedByNormalized === INITIAL_OWNER_UID.toLowerCase() ||
-        approvedByNormalized === INITIAL_OWNER_UID_ALT.toLowerCase())
+        approvedByNormalized === INITIAL_OWNER_UID.toLowerCase())
     ) {
       return null;
     }

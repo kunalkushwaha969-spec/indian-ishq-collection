@@ -713,6 +713,7 @@ import {
   REVOKED_MERCHANT_MESSAGE,
   INITIAL_OWNER_UID,
   INITIAL_OWNER_EMAIL,
+  isInitialOwnerUid,
   resolveEffectiveMerchantRole,
   buildManagedUserAccounts,
   validateRoleChangeSafety,
@@ -1303,6 +1304,70 @@ test('validateEmailChangeForm validates new email format, uniqueness, and passwo
     }).valid,
     false
   );
+});
+
+test('security regression: approving store operator MFdk9MDrXmNmYcUFk6R2rIxNFwG2 by owner VrLNKE3naCXN34GDog4tejrwpO13 and strict single-UID pinning', () => {
+  const operatorUid = 'MFdk9MDrXmNmYcUFk6R2rIxNFwG2';
+  const initialAccounts = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'password' },
+      { uid: operatorUid, email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [],
+    currentUser: { uid: INITIAL_OWNER_UID },
+  });
+
+  // Owner approves operator MFdk9MDrXmNmYcUFk6R2rIxNFwG2 as admin
+  const approvalCheck = validateRoleChangeSafety({
+    actorUid: INITIAL_OWNER_UID,
+    actorEmail: INITIAL_OWNER_EMAIL,
+    actorRole: 'admin',
+    targetUid: operatorUid,
+    targetEmail: 'operator@indianishq.in',
+    nextStatus: 'admin',
+    accounts: initialAccounts,
+    initialOwnerEmail: INITIAL_OWNER_EMAIL,
+    initialOwnerUid: INITIAL_OWNER_UID,
+  });
+  assert.equal(approvalCheck.allowed, true);
+
+  // Alternate UID (capital P) cannot act as owner without verified owner status
+  const altUid = 'VrLNKE3naCXN34GDog4tejrwPO13';
+  assert.equal(isInitialOwnerUid(altUid), false);
+  const altUidRole = resolveEffectiveMerchantRole({
+    uid: altUid,
+    email: INITIAL_OWNER_EMAIL,
+    emailVerified: true,
+  });
+  assert.equal(altUidRole, null); // Rejected because UID does not match immutable INITIAL_OWNER_UID
+
+  // Once approved, operator MFdk9MDrXmNmYcUFk6R2rIxNFwG2 is a full admin
+  const accountsWithAdminOperator = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'password' },
+      { uid: operatorUid, email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [
+      { uid: operatorUid, role: 'admin', email: 'operator@indianishq.in', approved_by: INITIAL_OWNER_EMAIL },
+    ],
+    currentUser: { uid: operatorUid },
+  });
+
+  const operatorAccount = accountsWithAdminOperator.find((a) => a.uid === operatorUid);
+  assert.equal(operatorAccount?.role, 'admin');
+  assert.equal(operatorAccount?.status, 'admin');
+
+  // Owner handover is now unlocked because a verified non-owner admin exists
+  const handoverCheck = canInitialOwnerHandover({
+    currentUserUid: INITIAL_OWNER_UID,
+    currentUserEmail: INITIAL_OWNER_EMAIL,
+    accounts: accountsWithAdminOperator,
+    initialOwnerEmail: INITIAL_OWNER_EMAIL,
+    initialOwnerUid: INITIAL_OWNER_UID,
+  });
+  assert.equal(handoverCheck.canHandover, true);
+  assert.equal(handoverCheck.activeOtherAdmins.length, 1);
+  assert.equal(handoverCheck.activeOtherAdmins[0].uid, operatorUid);
 });
 
 
