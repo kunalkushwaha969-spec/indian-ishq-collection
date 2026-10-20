@@ -113,24 +113,47 @@ if (typeof window !== 'undefined') {
   testConnection();
 }
 
-export async function isAuthorizedMerchantUser(user: User | null): Promise<boolean> {
-  if (!user) return false;
+export type MerchantRole = 'admin' | 'merchant';
+
+export const ADMINS_COLLECTION = 'admins';
+
+export function isValidMerchantRole(role: unknown): role is MerchantRole {
+  return role === 'admin' || role === 'merchant';
+}
+
+export async function getMerchantRole(user: User | null): Promise<MerchantRole | null> {
+  if (!user) return null;
+
+  // 1. Check Firestore /admins/{uid} document first so explicit roles take precedence
+  if (db && user.uid) {
+    try {
+      const adminSnap = await getDoc(doc(db, ADMINS_COLLECTION, user.uid));
+      if (adminSnap.exists()) {
+        const data = adminSnap.data();
+        if (data && isValidMerchantRole(data.role)) {
+          return data.role;
+        }
+      }
+    } catch {
+      // Non-admin user cannot read or does not have an admin document
+    }
+  }
+
+  // 2. Preserve the initial store owner as default "admin"
   if (
     user.email &&
     user.email.toLowerCase() === AUTHORIZED_MERCHANT_EMAIL.toLowerCase() &&
     user.emailVerified
   ) {
-    return true;
+    return 'admin';
   }
-  if (db) {
-    try {
-      const adminSnap = await getDoc(doc(db, 'admins', user.uid));
-      if (adminSnap.exists()) return true;
-    } catch {
-      // Non-admin user cannot read or does not have an admin doc
-    }
-  }
-  return false;
+
+  return null;
+}
+
+export async function isAuthorizedMerchantUser(user: User | null): Promise<boolean> {
+  const role = await getMerchantRole(user);
+  return role === 'admin' || role === 'merchant';
 }
 
 export async function signInMerchantWithGoogle(): Promise<User> {
@@ -138,11 +161,11 @@ export async function signInMerchantWithGoogle(): Promise<User> {
     throw new Error('Firebase Authentication is not initialized.');
   }
   const cred = await signInWithPopup(auth, googleProvider);
-  const authorized = await isAuthorizedMerchantUser(cred.user);
-  if (!authorized) {
+  const role = await getMerchantRole(cred.user);
+  if (!role) {
     await signOut(auth);
     throw new Error(
-      `Access denied: ${cred.user.email || 'This account'} is not authorized as a store administrator.`
+      `Access denied: ${cred.user.email || 'This account'} (UID: ${cred.user.uid}) is not authorized in the Firestore "admins" collection.`
     );
   }
   return cred.user;
@@ -153,11 +176,11 @@ export async function signInMerchantWithEmail(email: string, password: string): 
     throw new Error('Firebase Authentication is not initialized.');
   }
   const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-  const authorized = await isAuthorizedMerchantUser(cred.user);
-  if (!authorized) {
+  const role = await getMerchantRole(cred.user);
+  if (!role) {
     await signOut(auth);
     throw new Error(
-      `Access denied: ${cred.user.email || 'This account'} is not authorized as a store administrator.`
+      `Access denied: ${cred.user.email || 'This account'} (UID: ${cred.user.uid}) is not authorized in the Firestore "admins" collection.`
     );
   }
   return cred.user;
@@ -169,19 +192,19 @@ export async function signOutMerchant(): Promise<void> {
 }
 
 export function subscribeToMerchantAuth(
-  callback: (user: User | null, isAdmin: boolean) => void
+  callback: (user: User | null, isAdmin: boolean, role?: MerchantRole | null) => void
 ): () => void {
   if (!auth) {
-    callback(null, false);
+    callback(null, false, null);
     return () => {};
   }
   return onAuthStateChanged(auth, async (user) => {
     if (!user) {
-      callback(null, false);
+      callback(null, false, null);
       return;
     }
-    const authorized = await isAuthorizedMerchantUser(user);
-    callback(user, authorized);
+    const role = await getMerchantRole(user);
+    callback(user, role !== null, role);
   });
 }
 

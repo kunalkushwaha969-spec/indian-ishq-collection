@@ -77,9 +77,34 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["storeName", "phone", "email"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized store owner or merchant record in the admins collection keyed by Firebase Authentication UID.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["admin", "merchant"],
+          "description": "Authorization role granting merchant workspace access"
+        },
+        "email": {
+          "type": "string",
+          "description": "Optional email address of the authorized merchant"
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Optional ISO timestamp when access was granted"
+        }
+      },
+      "required": ["role"]
     }
   },
   "firestore": {
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Firebase-managed merchant and admin role registry keyed by Firebase Auth UID"
+    },
     "/products/{productId}": {
       "schema": { "$ref": "#/entities/Product" },
       "description": "Store collection of ethnic wear products and real-time inventory"
@@ -94,3 +119,4 @@
     }
   }
 }
+

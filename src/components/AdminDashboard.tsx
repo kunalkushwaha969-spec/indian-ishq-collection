@@ -14,6 +14,7 @@ import {
   setStoredToken,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
+  type MerchantRole,
 } from '../services/api';
 import {
   type MerchantActivity,
@@ -81,6 +82,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onThemePreviewChange,
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [merchantRole, setMerchantRole] = useState<MerchantRole | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
   const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
@@ -138,13 +140,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!isOpen) return;
 
     setIsCheckingAuth(true);
-    const unsubAuth = subscribeToMerchantAuth(async (_user, isAdmin) => {
+    const unsubAuth = subscribeToMerchantAuth(async (_user, isAdmin, role) => {
       if (isAdmin) {
         setIsAuthenticated(true);
+        setMerchantRole(role || 'merchant');
         onAuthChange(true);
         await loadData();
       } else {
         setIsAuthenticated(false);
+        setMerchantRole(null);
         onAuthChange(false);
       }
       setIsCheckingAuth(false);
@@ -244,8 +248,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     setLoginError(null);
     try {
-      await loginAdmin(password, email);
+      const res = await loginAdmin(password, email);
       setIsAuthenticated(true);
+      setMerchantRole(res.user.role);
       onAuthChange(true);
       await loadData();
     } catch (err: any) {
@@ -256,8 +261,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleGoogleLogin = async () => {
     setLoginError(null);
     try {
-      await loginAdminWithGoogle();
+      const res = await loginAdminWithGoogle();
       setIsAuthenticated(true);
+      setMerchantRole(res.user.role);
       onAuthChange(true);
       await loadData();
     } catch (err: any) {
@@ -270,6 +276,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setStoredToken(null);
     setOrders([]);
     setIsAuthenticated(false);
+    setMerchantRole(null);
     onAuthChange(false);
   };
 
@@ -443,13 +450,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <h2
-                id="admin-title"
-                className="font-serif text-lg sm:text-2xl font-semibold leading-tight truncate"
-                style={{ color: 'var(--text-main)' }}
-              >
-                Merchant Workspace
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2
+                  id="admin-title"
+                  className="font-serif text-lg sm:text-2xl font-semibold leading-tight truncate"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Merchant Workspace
+                </h2>
+                {isAuthenticated && merchantRole && (
+                  <span
+                    className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border shrink-0"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--primary)',
+                    }}
+                  >
+                    {merchantRole}
+                  </span>
+                )}
+              </div>
               <span className="text-[11px] block truncate" style={{ color: 'var(--text-muted)' }}>
                 {storeSettings.storeName || 'Indian Ishq Collection'}
               </span>

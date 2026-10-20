@@ -9,7 +9,9 @@ import {
 } from '../utils/ecommerce';
 import {
   auth,
+  getMerchantRole,
   isAuthorizedMerchantUser,
+  isValidMerchantRole,
   signInMerchantWithEmail,
   signInMerchantWithGoogle,
   signOutMerchant,
@@ -23,6 +25,7 @@ import {
   updateFirestoreOrderStatus,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
+  type MerchantRole,
 } from './firebase';
 export {
   subscribeToFirestoreProducts,
@@ -30,6 +33,10 @@ export {
   subscribeToMerchantAuth,
   signInMerchantWithGoogle,
   signOutMerchant,
+  getMerchantRole,
+  isAuthorizedMerchantUser,
+  isValidMerchantRole,
+  type MerchantRole,
 };
 
 import { addMerchantActivity } from './activity';
@@ -214,6 +221,11 @@ export async function fetchProducts(
 export async function createProduct(
   product: Omit<Product, 'id' | 'created_at'>
 ): Promise<Product> {
+  const isAdmin = await isAuthorizedMerchantUser(auth?.currentUser || null);
+  if (!isAdmin) {
+    throw new Error('Unauthorized: Only authorized store administrators or merchants can add products.');
+  }
+
   const newId = 'prod-' + Date.now().toString().slice(-6);
   const now = new Date().toISOString();
 
@@ -234,20 +246,10 @@ export async function createProduct(
     created_at: now,
   };
 
-  let createdProduct: Product | null = null;
-
-  try {
-    createdProduct = await saveFirestoreProduct(productRecord);
-  } catch (err) {
-    console.warn('Firestore product creation warning:', err);
-  }
-
-  if (!createdProduct) {
-    createdProduct = productRecord;
-  }
+  const createdProduct = await saveFirestoreProduct(productRecord);
 
   const existing = getLocalProducts();
-  setLocalProducts([createdProduct, ...existing.filter((p) => p.id !== createdProduct!.id)]);
+  setLocalProducts([createdProduct, ...existing.filter((p) => p.id !== createdProduct.id)]);
 
   addMerchantActivity({
     type: 'inventory',
@@ -262,6 +264,11 @@ export async function updateProduct(
   id: string,
   updates: Partial<Omit<Product, 'id'>>
 ): Promise<Product> {
+  const isAdmin = await isAuthorizedMerchantUser(auth?.currentUser || null);
+  if (!isAdmin) {
+    throw new Error('Unauthorized: Only authorized store administrators or merchants can update products.');
+  }
+
   const existing = getLocalProducts();
   const current = existing.find((p) => p.id === id);
 
@@ -309,11 +316,7 @@ export async function updateProduct(
     created_at: current?.created_at || new Date().toISOString(),
   };
 
-  try {
-    await saveFirestoreProduct(updatedRecord);
-  } catch (err) {
-    console.warn('Firestore product update warning:', err);
-  }
+  await saveFirestoreProduct(updatedRecord);
 
   const nextList = existing.some((p) => p.id === id)
     ? existing.map((p) => (p.id === id ? updatedRecord : p))
@@ -333,13 +336,14 @@ export async function updateProductStock(
   id: string,
   stock: number
 ): Promise<Product> {
+  const isAdmin = await isAuthorizedMerchantUser(auth?.currentUser || null);
+  if (!isAdmin) {
+    throw new Error('Unauthorized: Only authorized store administrators or merchants can update stock.');
+  }
+
   let updatedProduct: Product | null = null;
 
-  try {
-    await updateFirestoreProductStock(id, stock);
-  } catch (err) {
-    console.warn('Firestore stock update warning:', err);
-  }
+  await updateFirestoreProductStock(id, stock);
 
   const existing = getLocalProducts();
   let found = existing.find((p) => p.id === id);
@@ -368,11 +372,12 @@ export async function updateProductStock(
 }
 
 export async function deleteProduct(id: string): Promise<void> {
-  try {
-    await deleteFirestoreProduct(id);
-  } catch (err) {
-    console.warn('Firestore delete warning:', err);
+  const isAdmin = await isAuthorizedMerchantUser(auth?.currentUser || null);
+  if (!isAdmin) {
+    throw new Error('Unauthorized: Only authorized store administrators or merchants can delete products.');
   }
+
+  await deleteFirestoreProduct(id);
 
   const existing = getLocalProducts();
   setLocalProducts(existing.filter((p) => p.id !== id));
@@ -528,13 +533,14 @@ export async function updateOrderStatus(
 export async function loginAdmin(
   password: string,
   email?: string
-): Promise<{ token: string; user: { email: string; role: string } }> {
+): Promise<{ token: string; user: { email: string; role: MerchantRole } }> {
   const normalizedEmail = (email || '').trim();
   if (!normalizedEmail || !password) {
     throw new Error('Please enter both your administrator email and password.');
   }
 
   const firebaseUser = await signInMerchantWithEmail(normalizedEmail, password);
+  const role = (await getMerchantRole(firebaseUser)) || 'merchant';
   const idToken = await firebaseUser.getIdToken();
   setStoredToken(idToken);
 
@@ -542,16 +548,17 @@ export async function loginAdmin(
     token: idToken,
     user: {
       email: firebaseUser.email || normalizedEmail,
-      role: 'admin',
+      role,
     },
   };
 }
 
 export async function loginAdminWithGoogle(): Promise<{
   token: string;
-  user: { email: string; role: string };
+  user: { email: string; role: MerchantRole };
 }> {
   const firebaseUser = await signInMerchantWithGoogle();
+  const role = (await getMerchantRole(firebaseUser)) || 'merchant';
   const idToken = await firebaseUser.getIdToken();
   setStoredToken(idToken);
 
@@ -559,7 +566,7 @@ export async function loginAdminWithGoogle(): Promise<{
     token: idToken,
     user: {
       email: firebaseUser.email || '',
-      role: 'admin',
+      role,
     },
   };
 }
