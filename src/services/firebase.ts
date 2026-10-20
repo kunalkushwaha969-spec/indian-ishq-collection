@@ -2,8 +2,16 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
+  EmailAuthProvider,
   signInWithPopup,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updatePassword,
+  updateProfile,
+  verifyBeforeUpdateEmail,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
   signOut,
   onAuthStateChanged,
   type Auth,
@@ -25,8 +33,26 @@ import {
   writeBatch,
   type Firestore,
 } from 'firebase/firestore';
-import type { Product, Order } from '../utils/ecommerce';
-import { initialProducts, resolveSafeProductImage } from '../utils/ecommerce';
+import type {
+  Product,
+  Order,
+  AdminRecordStatus,
+  UserAccountStatus,
+  RegisteredUserDoc,
+  AdminRoleDoc,
+  ManagedUserAccount,
+} from '../utils/ecommerce';
+import {
+  initialProducts,
+  resolveSafeProductImage,
+  UNAUTHORIZED_MERCHANT_MESSAGE,
+  REVOKED_MERCHANT_MESSAGE,
+  resolveEffectiveMerchantRole,
+  buildManagedUserAccounts,
+  validateRoleChangeSafety,
+  canInitialOwnerHandover,
+  validateEmailChangeForm,
+} from '../utils/ecommerce';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 export enum OperationType {
@@ -71,6 +97,7 @@ try {
 export const db = dbInstance;
 export const auth = authInstance;
 
+export const AUTHORIZED_MERCHANT_UID = 'VrLNKE3naCXN34GDog4tejrwPO13';
 export const AUTHORIZED_MERCHANT_EMAIL = 'kunalkushwaha969@gmail.com';
 
 export function handleFirestoreError(
@@ -116,39 +143,151 @@ if (typeof window !== 'undefined') {
 export type MerchantRole = 'admin' | 'merchant';
 
 export const ADMINS_COLLECTION = 'admins';
+export const USERS_COLLECTION = 'users';
+
+const LOCAL_REGISTERED_USERS_KEY = 'ishq_registered_users_cache_v1';
+const LOCAL_ADMIN_ROLES_KEY = 'ishq_admin_roles_cache_v1';
+
+function getLocalRegisteredUsers(): RegisteredUserDoc[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    const raw = localStorage.getItem(LOCAL_REGISTERED_USERS_KEY);
+    return raw ? (JSON.parse(raw) as RegisteredUserDoc[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalRegisteredUser(entry: RegisteredUserDoc) {
+  try {
+    if (typeof window === 'undefined') return;
+    const current = getLocalRegisteredUsers();
+    const next = [entry, ...current.filter((u) => u.uid !== entry.uid)];
+    localStorage.setItem(LOCAL_REGISTERED_USERS_KEY, JSON.stringify(next));
+  } catch {}
+}
+
+function getLocalAdminRoles(): AdminRoleDoc[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    const raw = localStorage.getItem(LOCAL_ADMIN_ROLES_KEY);
+    return raw ? (JSON.parse(raw) as AdminRoleDoc[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalAdminRole(entry: AdminRoleDoc) {
+  try {
+    if (typeof window === 'undefined') return;
+    const current = getLocalAdminRoles();
+    const next = [entry, ...current.filter((a) => a.uid !== entry.uid)];
+    localStorage.setItem(LOCAL_ADMIN_ROLES_KEY, JSON.stringify(next));
+  } catch {}
+}
 
 export function isValidMerchantRole(role: unknown): role is MerchantRole {
   return role === 'admin' || role === 'merchant';
 }
 
-export async function getMerchantRole(user: User | null): Promise<MerchantRole | null> {
-  if (!user) return null;
+export async function recordRegisteredAccount(
+  user: User,
+  providerHint?: 'password' | 'google' | 'email',
+  customDisplayName?: string
+): Promise<RegisteredUserDoc | null> {
+  if (!user || !user.uid) return null;
 
-  // 1. Check Firestore /admins/{uid} document first so explicit roles take precedence
+  const detectedProvider =
+    providerHint ||
+    (user.providerData?.some((p) => p.providerId === 'google.com') ? 'google' : 'password');
+  const nowIso = new Date().toISOString();
+  const email = (user.email || '').trim().toLowerCase();
+  const displayName = (customDisplayName ?? user.displayName ?? '').trim();
+
+  const record: RegisteredUserDoc = {
+    uid: user.uid,
+    email,
+    ...(displayName ? { displayName } : {}),
+    provider: detectedProvider,
+    created_at: user.metadata?.creationTime
+      ? new Date(user.metadata.creationTime).toISOString()
+      : nowIso,
+    updated_at: nowIso,
+  };
+
+  saveLocalRegisteredUser(record);
+
+  if (db) {
+    try {
+      await setDoc(doc(db, USERS_COLLECTION, user.uid), record, { merge: true });
+    } catch {
+      // If /users rules are not yet deployed, local registration cache preserves visibility on this device
+    }
+  }
+
+  return record;
+}
+
+export async function getMerchantAccountState(user: User | null): Promise<{
+  role: MerchantRole | null;
+  status: UserAccountStatus;
+  isInitialOwner: boolean;
+}> {
+  if (!user) {
+    return { role: null, status: 'pending', isInitialOwner: false };
+  }
+
+  let adminDocRole: unknown = undefined;
+  let adminDocApprovedBy: string | null = null;
+
   if (db && user.uid) {
     try {
       const adminSnap = await getDoc(doc(db, ADMINS_COLLECTION, user.uid));
       if (adminSnap.exists()) {
         const data = adminSnap.data();
-        if (data && isValidMerchantRole(data.role)) {
-          return data.role;
-        }
+        adminDocRole = data?.role;
+        adminDocApprovedBy =
+          typeof data?.approved_by === 'string' ? data.approved_by : null;
       }
     } catch {
       // Non-admin user cannot read or does not have an admin document
     }
   }
 
-  // 2. Preserve the initial store owner as default "admin"
-  if (
+  const isInitialOwner = Boolean(
+    user.uid === AUTHORIZED_MERCHANT_UID &&
     user.email &&
-    user.email.toLowerCase() === AUTHORIZED_MERCHANT_EMAIL.toLowerCase() &&
-    user.emailVerified
-  ) {
-    return 'admin';
+    user.email.toLowerCase() === AUTHORIZED_MERCHANT_EMAIL.toLowerCase()
+  );
+
+  const resolvedRole = resolveEffectiveMerchantRole({
+    uid: user.uid,
+    email: user.email,
+    emailVerified: user.emailVerified,
+    adminDocRole,
+    adminDocApprovedBy,
+    initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
+    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
+  });
+
+  if (resolvedRole === 'admin') {
+    return { role: 'admin', status: 'admin', isInitialOwner };
   }
 
-  return null;
+  if (resolvedRole === 'merchant') {
+    return { role: 'merchant', status: 'merchant', isInitialOwner };
+  }
+
+  if (adminDocRole === 'revoked') {
+    return { role: null, status: 'revoked', isInitialOwner };
+  }
+
+  return { role: null, status: 'pending', isInitialOwner };
+}
+
+export async function getMerchantRole(user: User | null): Promise<MerchantRole | null> {
+  const state = await getMerchantAccountState(user);
+  return state.role;
 }
 
 export async function isAuthorizedMerchantUser(user: User | null): Promise<boolean> {
@@ -156,17 +295,34 @@ export async function isAuthorizedMerchantUser(user: User | null): Promise<boole
   return role === 'admin' || role === 'merchant';
 }
 
+export interface UnapprovedAccountDetails {
+  uid: string;
+  email: string;
+  status: 'pending' | 'revoked';
+  message: string;
+}
+
 export async function signInMerchantWithGoogle(): Promise<User> {
   if (!auth) {
     throw new Error('Firebase Authentication is not initialized.');
   }
   const cred = await signInWithPopup(auth, googleProvider);
-  const role = await getMerchantRole(cred.user);
-  if (!role) {
+  await recordRegisteredAccount(cred.user, 'google');
+  const state = await getMerchantAccountState(cred.user);
+  if (!state.role) {
+    const uid = cred.user.uid;
+    const email = cred.user.email || '';
     await signOut(auth);
-    throw new Error(
-      `Access denied: ${cred.user.email || 'This account'} (UID: ${cred.user.uid}) is not authorized in the Firestore "admins" collection.`
-    );
+    const err = new Error(
+      state.status === 'revoked' ? REVOKED_MERCHANT_MESSAGE : UNAUTHORIZED_MERCHANT_MESSAGE
+    ) as Error & { pendingAccount?: UnapprovedAccountDetails };
+    err.pendingAccount = {
+      uid,
+      email,
+      status: state.status === 'revoked' ? 'revoked' : 'pending',
+      message: err.message,
+    };
+    throw err;
   }
   return cred.user;
 }
@@ -176,14 +332,421 @@ export async function signInMerchantWithEmail(email: string, password: string): 
     throw new Error('Firebase Authentication is not initialized.');
   }
   const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-  const role = await getMerchantRole(cred.user);
-  if (!role) {
+  await recordRegisteredAccount(cred.user, 'password');
+  const state = await getMerchantAccountState(cred.user);
+  if (!state.role) {
+    const uid = cred.user.uid;
+    const userEmail = cred.user.email || email.trim();
     await signOut(auth);
-    throw new Error(
-      `Access denied: ${cred.user.email || 'This account'} (UID: ${cred.user.uid}) is not authorized in the Firestore "admins" collection.`
-    );
+    const err = new Error(
+      state.status === 'revoked' ? REVOKED_MERCHANT_MESSAGE : UNAUTHORIZED_MERCHANT_MESSAGE
+    ) as Error & { pendingAccount?: UnapprovedAccountDetails };
+    err.pendingAccount = {
+      uid,
+      email: userEmail,
+      status: state.status === 'revoked' ? 'revoked' : 'pending',
+      message: err.message,
+    };
+    throw err;
   }
   return cred.user;
+}
+
+export async function registerMerchantWithEmail(
+  email: string,
+  password: string,
+  displayName?: string
+): Promise<{
+  user: User | null;
+  uid: string;
+  email: string;
+  authorized: boolean;
+  role: MerchantRole | null;
+  status: UserAccountStatus;
+  message: string;
+}> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not initialized.');
+  }
+  const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+  if (displayName && displayName.trim()) {
+    try {
+      await updateProfile(cred.user, { displayName: displayName.trim() });
+    } catch {}
+  }
+
+  // Record the registration in /users/{uid} so the store owner can view & approve in User Management.
+  // Creating an account NEVER writes to /admins and NEVER automatically grants admin/merchant access.
+  await recordRegisteredAccount(cred.user, 'password', displayName);
+
+  const state = await getMerchantAccountState(cred.user);
+  const uid = cred.user.uid;
+  const registeredEmail = cred.user.email || email.trim();
+
+  if (!state.role) {
+    await signOut(auth);
+    return {
+      user: null,
+      uid,
+      email: registeredEmail,
+      authorized: false,
+      role: null,
+      status: state.status,
+      message:
+        state.status === 'revoked' ? REVOKED_MERCHANT_MESSAGE : UNAUTHORIZED_MERCHANT_MESSAGE,
+    };
+  }
+  return {
+    user: cred.user,
+    uid,
+    email: registeredEmail,
+    authorized: true,
+    role: state.role,
+    status: state.status,
+    message: 'Account created and authorized.',
+  };
+}
+
+export async function resetMerchantPassword(email: string): Promise<void> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not initialized.');
+  }
+  await sendPasswordResetEmail(auth, email.trim());
+}
+
+export async function changeMerchantPassword(params: {
+  currentPassword: string;
+  newPassword: string;
+  email?: string;
+}): Promise<void> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not initialized.');
+  }
+
+  const currentUser = auth.currentUser;
+  if (currentUser && currentUser.email) {
+    const credential = EmailAuthProvider.credential(currentUser.email, params.currentPassword);
+    await reauthenticateWithCredential(currentUser, credential);
+    await updatePassword(currentUser, params.newPassword);
+    return;
+  }
+
+  const targetEmail = (params.email || '').trim();
+  if (!targetEmail) {
+    throw new Error('Please enter your account email address.');
+  }
+  const cred = await signInWithEmailAndPassword(auth, targetEmail, params.currentPassword);
+  try {
+    await updatePassword(cred.user, params.newPassword);
+  } finally {
+    const role = await getMerchantRole(cred.user);
+    if (!role) {
+      await signOut(auth);
+    }
+  }
+}
+
+export async function changeMerchantEmail(params: {
+  newEmail: string;
+  currentPassword?: string;
+}): Promise<{ verificationSentTo: string; message: string }> {
+  if (!auth || !auth.currentUser) {
+    throw new Error('You must be signed in to change your email address.');
+  }
+
+  const currentUser = auth.currentUser;
+  const role = await getMerchantRole(currentUser);
+  if (!role) {
+    throw new Error('Unauthorized: Only authorized accounts can change account settings.');
+  }
+
+  const hasPasswordProvider = Boolean(
+    currentUser.providerData?.some((p) => p.providerId === 'password')
+  );
+  const validation = validateEmailChangeForm({
+    currentEmail: currentUser.email,
+    newEmail: params.newEmail,
+    currentPassword: params.currentPassword,
+    requiresPassword: hasPasswordProvider,
+  });
+  if (!validation.valid) {
+    throw new Error(validation.error || 'Please check your email details.');
+  }
+
+  const normalizedNewEmail = params.newEmail.trim().toLowerCase();
+
+  // Reauthenticate first to satisfy Firebase recent-login security requirement
+  if (hasPasswordProvider && currentUser.email && params.currentPassword) {
+    const credential = EmailAuthProvider.credential(currentUser.email, params.currentPassword);
+    await reauthenticateWithCredential(currentUser, credential);
+  } else if (currentUser.providerData?.some((p) => p.providerId === 'google.com')) {
+    await reauthenticateWithPopup(currentUser, googleProvider);
+  }
+
+  // Use Firebase Authentication's supported verification flow before updating email
+  await verifyBeforeUpdateEmail(currentUser, normalizedNewEmail);
+
+  return {
+    verificationSentTo: normalizedNewEmail,
+    message: `Verification link sent to ${normalizedNewEmail}. Please open that email and click the verification link to complete your email change. Your UID and Admin permissions remain preserved.`,
+  };
+}
+
+export async function updateMerchantDisplayName(displayName: string): Promise<string> {
+  if (!auth || !auth.currentUser) {
+    throw new Error('You must be signed in to update your profile.');
+  }
+  const currentUser = auth.currentUser;
+  const role = await getMerchantRole(currentUser);
+  if (!role) {
+    throw new Error('Unauthorized: Only authorized accounts can update profile details.');
+  }
+
+  const trimmed = displayName.trim().slice(0, 100);
+  await updateProfile(currentUser, { displayName: trimmed });
+  await recordRegisteredAccount(currentUser, undefined, trimmed);
+
+  if (db) {
+    try {
+      const adminRef = doc(db, ADMINS_COLLECTION, currentUser.uid);
+      const snap = await getDoc(adminRef);
+      if (snap.exists()) {
+        await updateDoc(adminRef, {
+          displayName: trimmed,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch {}
+  }
+
+  return trimmed;
+}
+
+export async function fetchManagedUserAccounts(): Promise<ManagedUserAccount[]> {
+  const currentUser = auth?.currentUser || null;
+  const role = await getMerchantRole(currentUser);
+  if (role !== 'admin') {
+    throw new Error('Unauthorized: Only full Admins can view and manage user accounts.');
+  }
+
+  if (currentUser) {
+    await recordRegisteredAccount(currentUser);
+  }
+
+  const registeredMap = new Map<string, RegisteredUserDoc>();
+  const adminMap = new Map<string, AdminRoleDoc>();
+
+  if (db) {
+    try {
+      const usersSnap = await getDocs(collection(db, USERS_COLLECTION));
+      usersSnap.forEach((d) => {
+        const data = d.data() as Partial<RegisteredUserDoc>;
+        const uid = data.uid || d.id;
+        if (uid) {
+          registeredMap.set(uid, {
+            uid,
+            email: data.email || '',
+            displayName: data.displayName || '',
+            provider: data.provider || 'password',
+            created_at: data.created_at,
+            updated_at: data.updated_at,
+          });
+        }
+      });
+    } catch {
+      // Fallback to local registrations only if /users list is unavailable
+      for (const localReg of getLocalRegisteredUsers()) {
+        if (localReg?.uid) registeredMap.set(localReg.uid, localReg);
+      }
+    }
+
+    try {
+      const adminsSnap = await getDocs(collection(db, ADMINS_COLLECTION));
+      adminsSnap.forEach((d) => {
+        const data = d.data() as Partial<AdminRoleDoc>;
+        const uid = data.uid || d.id;
+        if (
+          uid &&
+          (data.role === 'admin' || data.role === 'merchant' || data.role === 'revoked')
+        ) {
+          adminMap.set(uid, {
+            uid,
+            role: data.role,
+            email: data.email || '',
+            displayName: data.displayName || '',
+            approved_by: data.approved_by,
+            handover_to_uid: data.handover_to_uid,
+            created_at: data.created_at,
+            updated_at: data.updated_at,
+          });
+        }
+      });
+      // Replace local cache with authoritative Firestore snapshot so stale localStorage entries never persist
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(
+            LOCAL_ADMIN_ROLES_KEY,
+            JSON.stringify(Array.from(adminMap.values()))
+          );
+        }
+      } catch {}
+    } catch {
+      // If listing /admins fails before rules deployment, try reading current user's own /admins/{uid}
+      if (currentUser?.uid) {
+        try {
+          const ownSnap = await getDoc(doc(db, ADMINS_COLLECTION, currentUser.uid));
+          if (ownSnap.exists()) {
+            const data = ownSnap.data() as Partial<AdminRoleDoc>;
+            if (data.role === 'admin' || data.role === 'merchant' || data.role === 'revoked') {
+              adminMap.set(currentUser.uid, {
+                uid: currentUser.uid,
+                role: data.role,
+                email: data.email || currentUser.email || '',
+                displayName: data.displayName || currentUser.displayName || '',
+                approved_by: data.approved_by,
+                handover_to_uid: data.handover_to_uid,
+                created_at: data.created_at,
+                updated_at: data.updated_at,
+              });
+            }
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return buildManagedUserAccounts({
+    registeredUsers: Array.from(registeredMap.values()),
+    adminDocs: Array.from(adminMap.values()),
+    initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
+    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
+    currentUser: currentUser
+      ? {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          provider: currentUser.providerData?.some((p) => p.providerId === 'google.com')
+            ? 'google'
+            : 'password',
+          emailVerified: currentUser.emailVerified,
+        }
+      : null,
+  });
+}
+
+export async function assignUserMerchantRole(params: {
+  targetUid: string;
+  targetEmail?: string;
+  displayName?: string;
+  nextStatus: AdminRecordStatus;
+}): Promise<ManagedUserAccount[]> {
+  const currentUser = auth?.currentUser || null;
+  const actorRole = await getMerchantRole(currentUser);
+  if (!currentUser || actorRole !== 'admin') {
+    throw new Error('Unauthorized: Only full Admins can approve accounts or modify roles.');
+  }
+
+  const cleanUid = params.targetUid.trim();
+  const currentAccounts = await fetchManagedUserAccounts();
+
+  const safety = validateRoleChangeSafety({
+    actorUid: currentUser.uid,
+    actorEmail: currentUser.email,
+    actorRole,
+    targetUid: cleanUid,
+    targetEmail: params.targetEmail,
+    nextStatus: params.nextStatus,
+    accounts: currentAccounts,
+    initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
+    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
+  });
+
+  if (!safety.allowed) {
+    throw new Error(safety.error || 'This role change is not permitted.');
+  }
+
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
+
+  const existingAccount = currentAccounts.find((a) => a.uid === cleanUid);
+  const nowIso = new Date().toISOString();
+  const emailToSave = (params.targetEmail || existingAccount?.email || '').trim().toLowerCase();
+  const displayNameToSave = (params.displayName || existingAccount?.displayName || '').trim();
+
+  const payload: AdminRoleDoc = {
+    uid: cleanUid,
+    role: params.nextStatus,
+    ...(emailToSave && !emailToSave.startsWith('uid:') ? { email: emailToSave } : {}),
+    ...(displayNameToSave ? { displayName: displayNameToSave } : {}),
+    approved_by: (currentUser.email || currentUser.uid).slice(0, 200),
+    created_at: existingAccount?.created_at || nowIso,
+    updated_at: nowIso,
+  };
+
+  const path = `${ADMINS_COLLECTION}/${cleanUid}`;
+  try {
+    await setDoc(doc(db, ADMINS_COLLECTION, cleanUid), payload, { merge: true });
+    saveLocalAdminRole(payload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+
+  return await fetchManagedUserAccounts();
+}
+
+export async function revokeOwnInitialOwnerAccess(): Promise<void> {
+  const currentUser = auth?.currentUser || null;
+  const actorRole = await getMerchantRole(currentUser);
+  if (!currentUser || actorRole !== 'admin') {
+    throw new Error('Unauthorized: You must be signed in as an active Admin.');
+  }
+
+  const currentAccounts = await fetchManagedUserAccounts();
+  const handoverCheck = canInitialOwnerHandover({
+    currentUserUid: currentUser.uid,
+    currentUserEmail: currentUser.email,
+    accounts: currentAccounts,
+    initialOwnerEmail: AUTHORIZED_MERCHANT_EMAIL,
+    initialOwnerUid: AUTHORIZED_MERCHANT_UID,
+  });
+
+  if (!handoverCheck.isCurrentUserInitialOwner) {
+    throw new Error('Only the initial verified owner account can perform the owner handover.');
+  }
+  if (!handoverCheck.canHandover || handoverCheck.activeOtherAdmins.length === 0) {
+    throw new Error(
+      handoverCheck.reason ||
+        'Please approve at least one other Admin account before revoking your own website access.'
+    );
+  }
+
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
+
+  const replacementAdminUid = handoverCheck.activeOtherAdmins[0].uid;
+  const nowIso = new Date().toISOString();
+  const payload: AdminRoleDoc = {
+    uid: currentUser.uid,
+    role: 'revoked',
+    email: AUTHORIZED_MERCHANT_EMAIL.toLowerCase(),
+    ...(currentUser.displayName ? { displayName: currentUser.displayName } : {}),
+    approved_by: AUTHORIZED_MERCHANT_EMAIL.toLowerCase(),
+    handover_to_uid: replacementAdminUid,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  const path = `${ADMINS_COLLECTION}/${currentUser.uid}`;
+  try {
+    await setDoc(doc(db, ADMINS_COLLECTION, currentUser.uid), payload, { merge: true });
+    saveLocalAdminRole(payload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+
+  await signOut(auth!);
 }
 
 export async function signOutMerchant(): Promise<void> {
@@ -204,7 +767,12 @@ export function subscribeToMerchantAuth(
       return;
     }
     const role = await getMerchantRole(user);
-    callback(user, role !== null, role);
+    if (!role) {
+      callback(null, false, null);
+      return;
+    }
+    await recordRegisteredAccount(user);
+    callback(user, true, role);
   });
 }
 
@@ -223,8 +791,10 @@ export async function seedFirestoreIfEmpty(): Promise<Product[]> {
       return items;
     }
 
-    // Only attempt to seed Firestore if signed in as an admin
+    // Only attempt to seed Firestore if signed in as an authorized admin/merchant
     if (!auth?.currentUser || isSeeding) return [...initialProducts];
+    const role = await getMerchantRole(auth.currentUser);
+    if (!role) return [...initialProducts];
     isSeeding = true;
 
     const existingMap = new Map<string, Product>();

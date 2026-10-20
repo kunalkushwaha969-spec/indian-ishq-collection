@@ -80,30 +80,87 @@
     },
     "AdminUser": {
       "title": "AdminUser",
-      "description": "Authorized store owner or merchant record in the admins collection keyed by Firebase Authentication UID.",
+      "description": "Authorized store owner, admin, merchant, or revoked access record in the admins collection keyed by Firebase Authentication UID. The initial owner (UID: VrLNKE3naCXN34GDog4tejrwPO13, email: kunalkushwaha969@gmail.com) is immutable and cannot be demoted or deleted by other admins.",
       "type": "object",
       "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Authentication UID matching document ID"
+        },
         "role": {
           "type": "string",
-          "enum": ["admin", "merchant"],
-          "description": "Authorization role granting merchant workspace access"
+          "enum": ["admin", "merchant", "revoked"],
+          "description": "Authorization role granting full admin control, merchant access, or explicit revocation (including owner handover)"
         },
         "email": {
           "type": "string",
-          "description": "Optional email address of the authorized merchant"
+          "description": "Email address of the account"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Optional display name of the user"
+        },
+        "approved_by": {
+          "type": "string",
+          "description": "Email or UID of the Admin who updated this role"
+        },
+        "handover_to_uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the verified active Admin receiving website control when the initial owner revokes their own access"
         },
         "created_at": {
           "type": "string",
-          "description": "Optional ISO timestamp when access was granted"
+          "description": "ISO timestamp when record was created"
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "ISO timestamp when role was last updated"
         }
       },
       "required": ["role"]
+    },
+    "RegisteredUser": {
+      "title": "RegisteredUser",
+      "description": "Registered user account profile awaiting or holding merchant/admin authorization, keyed by Firebase Authentication UID. Contains no role or privilege fields.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Authentication UID matching document ID"
+        },
+        "email": {
+          "type": "string",
+          "description": "Registered account email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Optional user display name"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["password", "google", "email"],
+          "description": "Authentication provider used during registration"
+        },
+        "created_at": {
+          "type": "string",
+          "description": "ISO timestamp of initial registration"
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "ISO timestamp of latest profile sync"
+        }
+      },
+      "required": ["uid", "email", "provider"]
     }
   },
   "firestore": {
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminUser" },
-      "description": "Firebase-managed merchant and admin role registry keyed by Firebase Auth UID"
+      "description": "Firebase-managed admin, merchant, and revoked role registry keyed by Firebase Auth UID"
+    },
+    "/users/{userUid}": {
+      "schema": { "$ref": "#/entities/RegisteredUser" },
+      "description": "Registered accounts directory keyed by Firebase Auth UID for Admin approval in User Management"
     },
     "/products/{productId}": {
       "schema": { "$ref": "#/entities/Product" },

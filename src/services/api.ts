@@ -9,11 +9,22 @@ import {
 } from '../utils/ecommerce';
 import {
   auth,
+  AUTHORIZED_MERCHANT_UID,
+  AUTHORIZED_MERCHANT_EMAIL,
   getMerchantRole,
+  getMerchantAccountState,
   isAuthorizedMerchantUser,
   isValidMerchantRole,
   signInMerchantWithEmail,
   signInMerchantWithGoogle,
+  registerMerchantWithEmail,
+  resetMerchantPassword,
+  changeMerchantPassword,
+  changeMerchantEmail,
+  updateMerchantDisplayName,
+  fetchManagedUserAccounts,
+  assignUserMerchantRole,
+  revokeOwnInitialOwnerAccess,
   signOutMerchant,
   subscribeToMerchantAuth,
   fetchFirestoreProducts,
@@ -26,17 +37,31 @@ import {
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
   type MerchantRole,
+  type UnapprovedAccountDetails,
 } from './firebase';
 export {
+  auth,
+  AUTHORIZED_MERCHANT_UID,
+  AUTHORIZED_MERCHANT_EMAIL,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
   subscribeToMerchantAuth,
   signInMerchantWithGoogle,
+  registerMerchantWithEmail,
+  resetMerchantPassword,
+  changeMerchantPassword,
+  changeMerchantEmail,
+  updateMerchantDisplayName,
+  fetchManagedUserAccounts,
+  assignUserMerchantRole,
+  revokeOwnInitialOwnerAccess,
   signOutMerchant,
   getMerchantRole,
+  getMerchantAccountState,
   isAuthorizedMerchantUser,
   isValidMerchantRole,
   type MerchantRole,
+  type UnapprovedAccountDetails,
 };
 
 import { addMerchantActivity } from './activity';
@@ -568,6 +593,50 @@ export async function loginAdminWithGoogle(): Promise<{
       email: firebaseUser.email || '',
       role,
     },
+  };
+}
+
+export async function createMerchantAccount(
+  email: string,
+  password: string,
+  displayName?: string
+): Promise<{
+  uid: string;
+  email: string;
+  authorized: boolean;
+  role: MerchantRole | null;
+  status: 'admin' | 'merchant' | 'pending' | 'revoked';
+  message: string;
+  token?: string;
+}> {
+  const normalizedEmail = email.trim();
+  if (!normalizedEmail || !password) {
+    throw new Error('Please enter both your email and password.');
+  }
+
+  const res = await registerMerchantWithEmail(normalizedEmail, password, displayName);
+  if (!res.authorized || !res.user || !res.role) {
+    setStoredToken(null);
+    return {
+      uid: res.uid,
+      email: res.email,
+      authorized: false,
+      role: null,
+      status: res.status,
+      message: res.message,
+    };
+  }
+
+  const idToken = await res.user.getIdToken();
+  setStoredToken(idToken);
+  return {
+    uid: res.uid,
+    email: res.email,
+    authorized: true,
+    role: res.role,
+    status: res.status,
+    message: res.message,
+    token: idToken,
   };
 }
 

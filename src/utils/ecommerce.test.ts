@@ -707,6 +707,17 @@ import {
   validateStoreSettingsAmounts,
   MAX_FREE_SHIPPING_THRESHOLD,
   MAX_STANDARD_SHIPPING_FEE,
+  validateMerchantAuthForm,
+  formatMerchantAuthError,
+  UNAUTHORIZED_MERCHANT_MESSAGE,
+  REVOKED_MERCHANT_MESSAGE,
+  INITIAL_OWNER_UID,
+  INITIAL_OWNER_EMAIL,
+  resolveEffectiveMerchantRole,
+  buildManagedUserAccounts,
+  validateRoleChangeSafety,
+  canInitialOwnerHandover,
+  validateEmailChangeForm,
 } from './ecommerce.ts';
 
 test('validateStoreSettingsAmounts accepts valid rupee amounts (99, 499, 999, 1999, 2499) and rejects negative or out-of-range values', () => {
@@ -767,4 +778,531 @@ test('mergeAndSanitizeStoreSettings preserves exact rupee amounts such as 99, 49
   assert.equal(s3.freeShippingThreshold, 999);
   assert.equal(s3.standardShippingFee, 0);
 });
+
+test('validateMerchantAuthForm validates login, signup, forgot, and change_password flows', () => {
+  // Login
+  assert.equal(
+    validateMerchantAuthForm({ mode: 'login', email: 'merchant@indianishq.in', password: 'secret' }).valid,
+    true
+  );
+  assert.equal(
+    validateMerchantAuthForm({ mode: 'login', email: 'invalid-email', password: 'secret' }).valid,
+    false
+  );
+  assert.equal(
+    validateMerchantAuthForm({ mode: 'login', email: 'merchant@indianishq.in', password: '' }).valid,
+    false
+  );
+
+  // Signup
+  assert.equal(
+    validateMerchantAuthForm({
+      mode: 'signup',
+      email: 'merchant@indianishq.in',
+      password: 'password123',
+      confirmPassword: 'password123',
+    }).valid,
+    true
+  );
+  assert.equal(
+    validateMerchantAuthForm({
+      mode: 'signup',
+      email: 'merchant@indianishq.in',
+      password: '123',
+      confirmPassword: '123',
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateMerchantAuthForm({
+      mode: 'signup',
+      email: 'merchant@indianishq.in',
+      password: 'password123',
+      confirmPassword: 'differentPassword',
+    }).valid,
+    false
+  );
+
+  // Forgot password
+  assert.equal(
+    validateMerchantAuthForm({ mode: 'forgot', email: 'merchant@indianishq.in' }).valid,
+    true
+  );
+  assert.equal(validateMerchantAuthForm({ mode: 'forgot', email: '' }).valid, false);
+
+  // Change password
+  assert.equal(
+    validateMerchantAuthForm({
+      mode: 'change_password',
+      email: 'merchant@indianishq.in',
+      currentPassword: 'oldPassword1',
+      newPassword: 'newPassword2',
+      confirmPassword: 'newPassword2',
+      requireEmailForPasswordChange: true,
+    }).valid,
+    true
+  );
+  assert.equal(
+    validateMerchantAuthForm({
+      mode: 'change_password',
+      email: 'merchant@indianishq.in',
+      currentPassword: 'samePassword',
+      newPassword: 'samePassword',
+      confirmPassword: 'samePassword',
+      requireEmailForPasswordChange: true,
+    }).valid,
+    false
+  );
+});
+
+test('formatMerchantAuthError returns friendly messages without exposing private account info', () => {
+  const unauthMsg = formatMerchantAuthError(new Error(UNAUTHORIZED_MERCHANT_MESSAGE), 'login');
+  assert.ok(unauthMsg.includes('Account created, but merchant access has not been granted'));
+  assert.ok(!unauthMsg.includes('UID:'));
+
+  const revokedMsg = formatMerchantAuthError(new Error(REVOKED_MERCHANT_MESSAGE), 'login');
+  assert.ok(revokedMsg.includes('Website administrative access for this account has been revoked'));
+
+  const inUseMsg = formatMerchantAuthError({ code: 'auth/email-already-in-use' }, 'signup');
+  assert.ok(inUseMsg.includes('already exists'));
+
+  const emailChangeInUseMsg = formatMerchantAuthError({ code: 'auth/email-already-in-use' }, 'change_email');
+  assert.ok(emailChangeInUseMsg.includes('already in use'));
+
+  const opNotAllowedMsg = formatMerchantAuthError({ code: 'auth/operation-not-allowed' }, 'signup');
+  assert.ok(opNotAllowedMsg.includes('Email/Password sign-in is not enabled yet'));
+});
+
+test('resolveEffectiveMerchantRole handles initial owner (UID + verified email), approved roles, pending users, and owner handover revocation', () => {
+  // Initial verified owner matching BOTH UID and email gets admin
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      emailVerified: true,
+      adminDocRole: undefined,
+    }),
+    'admin'
+  );
+
+  // Different UID with initial owner email is REJECTED (cannot impersonate owner)
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: 'uid-attacker-spoof',
+      email: INITIAL_OWNER_EMAIL,
+      emailVerified: true,
+      adminDocRole: undefined,
+    }),
+    null
+  );
+
+  // Initial owner UID with unverified email does NOT get admin without /admins doc
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      emailVerified: false,
+      adminDocRole: undefined,
+    }),
+    null
+  );
+
+  // Initial owner with role === 'revoked' in /admins loses website admin access (handover completed)
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      emailVerified: true,
+      adminDocRole: 'revoked',
+      adminDocApprovedBy: INITIAL_OWNER_EMAIL,
+    }),
+    null
+  );
+
+  // Store operator approved with role === 'admin' gets full admin
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: 'uid-operator',
+      email: 'operator@indianishq.in',
+      emailVerified: false,
+      adminDocRole: 'admin',
+    }),
+    'admin'
+  );
+
+  // Store operator approved with role === 'merchant' gets merchant
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: 'uid-staff',
+      email: 'staff@indianishq.in',
+      emailVerified: false,
+      adminDocRole: 'merchant',
+    }),
+    'merchant'
+  );
+
+  // Newly registered account without /admins doc gets null (pending)
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: 'uid-new-user',
+      email: 'newuser@indianishq.in',
+      emailVerified: true,
+      adminDocRole: undefined,
+    }),
+    null
+  );
+});
+
+test('buildManagedUserAccounts merges /users and /admins, sorts pending first, and tracks handover state', () => {
+  const accounts = buildManagedUserAccounts({
+    registeredUsers: [
+      {
+        uid: 'uid-operator',
+        email: 'operator@indianishq.in',
+        displayName: 'Priya Operator',
+        provider: 'password',
+        created_at: '2026-10-20T09:00:00Z',
+        updated_at: '2026-10-20T09:00:00Z',
+      },
+      {
+        uid: 'uid-pending',
+        email: 'pending@indianishq.in',
+        displayName: 'New Applicant',
+        provider: 'google',
+        created_at: '2026-10-20T09:30:00Z',
+        updated_at: '2026-10-20T09:30:00Z',
+      },
+    ],
+    adminDocs: [
+      {
+        uid: 'uid-operator',
+        role: 'admin',
+        email: 'operator@indianishq.in',
+        approved_by: INITIAL_OWNER_EMAIL,
+        updated_at: '2026-10-20T09:15:00Z',
+      },
+    ],
+    currentUser: {
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      displayName: 'Kunal Owner',
+      provider: 'google',
+      emailVerified: true,
+    },
+  });
+
+  assert.equal(accounts.length, 3);
+  // Pending account sorted first
+  assert.equal(accounts[0].uid, 'uid-pending');
+  assert.equal(accounts[0].status, 'pending');
+  assert.equal(accounts[0].role, null);
+
+  // Both owner and operator are active admins
+  const ownerAcc = accounts.find((a) => a.uid === INITIAL_OWNER_UID);
+  const operatorAcc = accounts.find((a) => a.uid === 'uid-operator');
+  assert.equal(ownerAcc?.status, 'admin');
+  assert.equal(ownerAcc?.isInitialOwner, true);
+  assert.equal(operatorAcc?.status, 'admin');
+  assert.equal(operatorAcc?.role, 'admin');
+});
+
+test('validateRoleChangeSafety and canInitialOwnerHandover prevent lockouts and enforce admin-only changes', () => {
+  const baseAccounts = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'google' },
+      { uid: 'uid-operator', email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [],
+  });
+
+  // 1. Before operator is approved as Admin, owner cannot handover (would leave 0 admins)
+  const handoverBefore = canInitialOwnerHandover({
+    currentUserUid: INITIAL_OWNER_UID,
+    currentUserEmail: INITIAL_OWNER_EMAIL,
+    accounts: baseAccounts,
+  });
+  assert.equal(handoverBefore.canHandover, false);
+
+  const selfRevokeBefore = validateRoleChangeSafety({
+    actorUid: INITIAL_OWNER_UID,
+    actorEmail: INITIAL_OWNER_EMAIL,
+    actorRole: 'admin',
+    targetUid: INITIAL_OWNER_UID,
+    nextStatus: 'revoked',
+    accounts: baseAccounts,
+  });
+  assert.equal(selfRevokeBefore.allowed, false);
+
+  // 2. Merchant role cannot approve or modify roles
+  const merchantAttempt = validateRoleChangeSafety({
+    actorUid: 'uid-merchant',
+    actorEmail: 'merchant@indianishq.in',
+    actorRole: 'merchant',
+    targetUid: 'uid-operator',
+    nextStatus: 'admin',
+    accounts: baseAccounts,
+  });
+  assert.equal(merchantAttempt.allowed, false);
+
+  // 3. Owner approves operator as Admin
+  const approveAttempt = validateRoleChangeSafety({
+    actorUid: INITIAL_OWNER_UID,
+    actorEmail: INITIAL_OWNER_EMAIL,
+    actorRole: 'admin',
+    targetUid: 'uid-operator',
+    nextStatus: 'admin',
+    accounts: baseAccounts,
+  });
+  assert.equal(approveAttempt.allowed, true);
+
+  // 4. Once operator is an active Admin, owner can safely handover & revoke own website access
+  const accountsWithApprovedOperator = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'google' },
+      { uid: 'uid-operator', email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [{ uid: 'uid-operator', role: 'admin', email: 'operator@indianishq.in' }],
+  });
+
+  const handoverReady = canInitialOwnerHandover({
+    currentUserUid: INITIAL_OWNER_UID,
+    currentUserEmail: INITIAL_OWNER_EMAIL,
+    accounts: accountsWithApprovedOperator,
+  });
+  assert.equal(handoverReady.canHandover, true);
+  assert.equal(handoverReady.activeOtherAdmins.length, 1);
+
+  const selfRevokeReady = validateRoleChangeSafety({
+    actorUid: INITIAL_OWNER_UID,
+    actorEmail: INITIAL_OWNER_EMAIL,
+    actorRole: 'admin',
+    targetUid: INITIAL_OWNER_UID,
+    nextStatus: 'revoked',
+    accounts: accountsWithApprovedOperator,
+  });
+  assert.equal(selfRevokeReady.allowed, true);
+
+  // 5. Non-initial-owner Admin cannot self-revoke their own account
+  const operatorSelfRevoke = validateRoleChangeSafety({
+    actorUid: 'uid-operator',
+    actorEmail: 'operator@indianishq.in',
+    actorRole: 'admin',
+    targetUid: 'uid-operator',
+    nextStatus: 'revoked',
+    accounts: accountsWithApprovedOperator,
+  });
+  assert.equal(operatorSelfRevoke.allowed, false);
+});
+
+test('security regression: other admins cannot revoke, demote, or modify the initial owner before or after handover', () => {
+  const accounts = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'google' },
+      { uid: 'uid-operator', email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [{ uid: 'uid-operator', role: 'admin', email: 'operator@indianishq.in' }],
+    currentUser: {
+      uid: 'uid-operator',
+      email: 'operator@indianishq.in',
+      provider: 'password',
+      emailVerified: true,
+    },
+  });
+
+  // Ordinary admin attempting to revoke the initial owner by UID is blocked
+  const operatorRevokeOwner = validateRoleChangeSafety({
+    actorUid: 'uid-operator',
+    actorEmail: 'operator@indianishq.in',
+    actorRole: 'admin',
+    targetUid: INITIAL_OWNER_UID,
+    targetEmail: INITIAL_OWNER_EMAIL,
+    nextStatus: 'revoked',
+    accounts,
+  });
+  assert.equal(operatorRevokeOwner.allowed, false);
+  assert.ok(operatorRevokeOwner.error?.includes('initial owner'));
+
+  // Ordinary admin attempting to demote the initial owner by omitting email is ALSO blocked (protected by UID)
+  const operatorDemoteOwnerNoEmail = validateRoleChangeSafety({
+    actorUid: 'uid-operator',
+    actorEmail: 'operator@indianishq.in',
+    actorRole: 'admin',
+    targetUid: INITIAL_OWNER_UID,
+    targetEmail: undefined,
+    nextStatus: 'merchant',
+    accounts,
+  });
+  assert.equal(operatorDemoteOwnerNoEmail.allowed, false);
+  assert.ok(operatorDemoteOwnerNoEmail.error?.includes('initial owner'));
+
+  // Even if an admin doc had role: 'revoked' written by someone other than the initial owner,
+  // resolveEffectiveMerchantRole preserves the verified initial owner's Admin role
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      emailVerified: true,
+      adminDocRole: 'revoked',
+      adminDocApprovedBy: 'operator@indianishq.in',
+    }),
+    'admin'
+  );
+  assert.equal(
+    resolveEffectiveMerchantRole({
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      emailVerified: true,
+      adminDocRole: 'merchant',
+      adminDocApprovedBy: 'operator@indianishq.in',
+    }),
+    'admin'
+  );
+});
+
+test('security regression: forged /users profile claiming initial owner email cannot impersonate owner or unlock handover', () => {
+  const accountsWithSpoofAttempt = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'google' },
+      { uid: 'uid-attacker', email: INITIAL_OWNER_EMAIL, provider: 'password' },
+    ],
+    adminDocs: [],
+    currentUser: {
+      uid: INITIAL_OWNER_UID,
+      email: INITIAL_OWNER_EMAIL,
+      provider: 'google',
+      emailVerified: true,
+    },
+  });
+
+  const realOwner = accountsWithSpoofAttempt.find((a) => a.uid === INITIAL_OWNER_UID);
+  const spoofAccount = accountsWithSpoofAttempt.find((a) => a.uid === 'uid-attacker');
+
+  assert.equal(realOwner?.isInitialOwner, true);
+  assert.equal(realOwner?.status, 'admin');
+
+  // Forged account does NOT receive isInitialOwner or admin status
+  assert.equal(spoofAccount?.isInitialOwner, false);
+  assert.equal(spoofAccount?.status, 'pending');
+  assert.equal(spoofAccount?.role, null);
+
+  // Handover remains blocked because no genuine replacement Admin exists
+  const handoverCheck = canInitialOwnerHandover({
+    currentUserUid: INITIAL_OWNER_UID,
+    currentUserEmail: INITIAL_OWNER_EMAIL,
+    accounts: accountsWithSpoofAttempt,
+  });
+  assert.equal(handoverCheck.canHandover, false);
+  assert.equal(handoverCheck.activeOtherAdmins.length, 0);
+});
+
+test('security regression: replacement admin requirement prevents handover to revoked or non-admin replacement', () => {
+  // Handover with replacement admin who is currently revoked must be rejected
+  const accountsWithRevokedOperator = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'google' },
+      { uid: 'uid-operator', email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [{ uid: 'uid-operator', role: 'revoked', email: 'operator@indianishq.in' }],
+  });
+
+  const checkRevokedReplacement = canInitialOwnerHandover({
+    currentUserUid: INITIAL_OWNER_UID,
+    currentUserEmail: INITIAL_OWNER_EMAIL,
+    accounts: accountsWithRevokedOperator,
+  });
+  assert.equal(checkRevokedReplacement.canHandover, false);
+  assert.equal(checkRevokedReplacement.activeOtherAdmins.length, 0);
+
+  // Handover with replacement who is only a merchant must be rejected
+  const accountsWithMerchantOperator = buildManagedUserAccounts({
+    registeredUsers: [
+      { uid: INITIAL_OWNER_UID, email: INITIAL_OWNER_EMAIL, provider: 'google' },
+      { uid: 'uid-operator', email: 'operator@indianishq.in', provider: 'password' },
+    ],
+    adminDocs: [{ uid: 'uid-operator', role: 'merchant', email: 'operator@indianishq.in' }],
+  });
+
+  const checkMerchantReplacement = canInitialOwnerHandover({
+    currentUserUid: INITIAL_OWNER_UID,
+    currentUserEmail: INITIAL_OWNER_EMAIL,
+    accounts: accountsWithMerchantOperator,
+  });
+  assert.equal(checkMerchantReplacement.canHandover, false);
+  assert.equal(checkMerchantReplacement.activeOtherAdmins.length, 0);
+});
+
+test('security regression: cross-account and unauthorized privilege escalation validation', () => {
+  // Ordinary non-admin user cannot approve accounts
+  const unauthEscalation = validateRoleChangeSafety({
+    actorUid: 'uid-unauth-user',
+    actorEmail: 'user@example.com',
+    actorRole: null,
+    targetUid: 'uid-unauth-user',
+    nextStatus: 'admin',
+    accounts: [],
+  });
+  assert.equal(unauthEscalation.allowed, false);
+
+  // Merchant cannot assign admin role to anyone
+  const merchantEscalation = validateRoleChangeSafety({
+    actorUid: 'uid-merchant',
+    actorEmail: 'merchant@indianishq.in',
+    actorRole: 'merchant',
+    targetUid: 'uid-friend',
+    nextStatus: 'admin',
+    accounts: [],
+  });
+  assert.equal(merchantEscalation.allowed, false);
+
+  // Demoting the last active Admin is rejected
+  const singleAdminAccounts = buildManagedUserAccounts({
+    registeredUsers: [{ uid: 'uid-sole-admin', email: 'admin@indianishq.in', provider: 'password' }],
+    adminDocs: [{ uid: 'uid-sole-admin', role: 'admin', email: 'admin@indianishq.in' }],
+  });
+  const demoteSoleAdmin = validateRoleChangeSafety({
+    actorUid: 'uid-other-admin',
+    actorEmail: 'other@indianishq.in',
+    actorRole: 'admin',
+    targetUid: 'uid-sole-admin',
+    nextStatus: 'merchant',
+    accounts: singleAdminAccounts,
+  });
+  assert.equal(demoteSoleAdmin.allowed, false);
+  assert.ok(demoteSoleAdmin.error?.includes('last active Admin'));
+});
+
+test('validateEmailChangeForm validates new email format, uniqueness, and password requirement', () => {
+  assert.equal(
+    validateEmailChangeForm({
+      currentEmail: 'old@indianishq.in',
+      newEmail: 'new@indianishq.in',
+      currentPassword: 'secretPassword',
+      requiresPassword: true,
+    }).valid,
+    true
+  );
+
+  // Same email rejected
+  assert.equal(
+    validateEmailChangeForm({
+      currentEmail: 'old@indianishq.in',
+      newEmail: 'OLD@indianishq.in',
+      currentPassword: 'secretPassword',
+      requiresPassword: true,
+    }).valid,
+    false
+  );
+
+  // Missing password when required rejected
+  assert.equal(
+    validateEmailChangeForm({
+      currentEmail: 'old@indianishq.in',
+      newEmail: 'new@indianishq.in',
+      currentPassword: '',
+      requiresPassword: true,
+    }).valid,
+    false
+  );
+});
+
 

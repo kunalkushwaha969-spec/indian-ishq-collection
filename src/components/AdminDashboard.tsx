@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import type { Product, Order } from '../utils/ecommerce';
-import { formatINR, resolveSafeProductImage } from '../utils/ecommerce';
+import type { Product, Order, MerchantAuthMode } from '../utils/ecommerce';
+import {
+  formatINR,
+  resolveSafeProductImage,
+  validateMerchantAuthForm,
+  formatMerchantAuthError,
+} from '../utils/ecommerce';
 import {
   fetchProducts,
   fetchOrders,
@@ -9,12 +14,16 @@ import {
   updateOrderStatus,
   loginAdmin,
   loginAdminWithGoogle,
+  createMerchantAccount,
+  resetMerchantPassword,
+  changeMerchantPassword,
   signOutMerchant,
   subscribeToMerchantAuth,
   setStoredToken,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
   type MerchantRole,
+  type UnapprovedAccountDetails,
 } from '../services/api';
 import {
   type MerchantActivity,
@@ -24,6 +33,7 @@ import {
 } from '../services/activity';
 import { ProductModal } from './ProductModal';
 import { StoreCustomization } from './StoreCustomization';
+import { UserManagementPanel } from './UserManagementPanel';
 import {
   type StoreSettings,
   DEFAULT_STORE_SETTINGS,
@@ -57,6 +67,7 @@ import {
   MapPin,
   Phone,
   User,
+  Users,
   CheckCircle2,
   X,
   LayoutDashboard,
@@ -65,6 +76,14 @@ import {
   Search,
   MessageCircle,
   ExternalLink,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Mail,
+  UserPlus,
+  Clock,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -76,7 +95,13 @@ interface AdminDashboardProps {
   onThemePreviewChange?: (themeId: string, mode: 'light' | 'dark' | 'system') => void;
 }
 
-type MerchantSectionId = 'dashboard' | 'products' | 'orders' | 'customize' | 'settings';
+type MerchantSectionId =
+  | 'dashboard'
+  | 'products'
+  | 'orders'
+  | 'customize'
+  | 'settings'
+  | 'users';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   isOpen,
@@ -89,11 +114,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [merchantRole, setMerchantRole] = useState<MerchantRole | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
-  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState<MerchantAuthMode>('login');
   const [email, setEmail] = useState('');
+  const [signupDisplayName, setSignupDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<{
+    type: 'success' | 'warning';
+    message: string;
+  } | null>(null);
+  const [pendingAccountInfo, setPendingAccountInfo] =
+    useState<UnapprovedAccountDetails | null>(null);
+  const [copiedPendingUid, setCopiedPendingUid] = useState<boolean>(false);
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState<boolean>(false);
 
-  // Strictly 5 Main Sections: Dashboard, Products, Orders, Customize Store, Store Settings
+  // Main Sections: Dashboard, Products, Orders, Customize Store, Store Settings, Users & Access
   const [activeTab, setActiveTab] = useState<MerchantSectionId>('dashboard');
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -258,30 +298,219 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setBanner(null), 3000);
   };
 
+  const switchAuthMode = (nextMode: MerchantAuthMode) => {
+    setAuthMode(nextMode);
+    setLoginError(null);
+    setAuthNotice(null);
+    setPassword('');
+    setConfirmPassword('');
+    setCurrentPassword('');
+    setNewPassword('');
+    setShowPassword(false);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setAuthNotice(null);
+    setPendingAccountInfo(null);
+
+    const check = validateMerchantAuthForm({ mode: 'login', email, password });
+    if (!check.valid) {
+      setLoginError(check.error || 'Please enter a valid email and password.');
+      return;
+    }
+
+    setIsSubmittingAuth(true);
     try {
       const res = await loginAdmin(password, email);
+      setPassword('');
+      setPendingAccountInfo(null);
       setIsAuthenticated(true);
       setMerchantRole(res.user.role);
       onAuthChange(true);
       await loadData();
-    } catch (err: any) {
-      setLoginError(err.message || 'Invalid administrator email or password.');
+    } catch (err: unknown) {
+      setPassword('');
+      const pending =
+        typeof err === 'object' && err !== null && 'pendingAccount' in err
+          ? (err as { pendingAccount?: UnapprovedAccountDetails }).pendingAccount || null
+          : null;
+      if (pending) {
+        setPendingAccountInfo(pending);
+      }
+      const formatted = formatMerchantAuthError(err, 'login');
+      if (
+        formatted.includes('Account created, but merchant access has not been granted') ||
+        formatted.includes('Website administrative access for this account has been revoked')
+      ) {
+        setAuthNotice({ type: 'warning', message: formatted });
+      } else {
+        setLoginError(formatted);
+      }
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  };
+
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setAuthNotice(null);
+    setPendingAccountInfo(null);
+
+    const check = validateMerchantAuthForm({
+      mode: 'signup',
+      email,
+      password,
+      confirmPassword,
+    });
+    if (!check.valid) {
+      setLoginError(check.error || 'Please verify your email and password.');
+      return;
+    }
+
+    setIsSubmittingAuth(true);
+    try {
+      const res = await createMerchantAccount(email, password, signupDisplayName);
+      setPassword('');
+      setConfirmPassword('');
+      if (res.authorized && res.role) {
+        setPendingAccountInfo(null);
+        setIsAuthenticated(true);
+        setMerchantRole(res.role);
+        onAuthChange(true);
+        await loadData();
+      } else {
+        setAuthMode('login');
+        setPendingAccountInfo({
+          uid: res.uid,
+          email: res.email,
+          status: res.status === 'revoked' ? 'revoked' : 'pending',
+          message: res.message,
+        });
+        setAuthNotice({
+          type: 'warning',
+          message: res.message,
+        });
+      }
+    } catch (err: unknown) {
+      setPassword('');
+      setConfirmPassword('');
+      setLoginError(formatMerchantAuthError(err, 'signup'));
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setAuthNotice(null);
+
+    const check = validateMerchantAuthForm({ mode: 'forgot', email });
+    if (!check.valid) {
+      setLoginError(check.error || 'Please enter your email address.');
+      return;
+    }
+
+    setIsSubmittingAuth(true);
+    try {
+      await resetMerchantPassword(email);
+      setAuthNotice({
+        type: 'success',
+        message:
+          'Password reset email sent! Please check your inbox and spam folder to choose a new password.',
+      });
+    } catch (err: unknown) {
+      setLoginError(formatMerchantAuthError(err, 'forgot'));
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setAuthNotice(null);
+
+    const check = validateMerchantAuthForm({
+      mode: 'change_password',
+      email,
+      currentPassword,
+      newPassword,
+      confirmPassword,
+      requireEmailForPasswordChange: !isAuthenticated,
+    });
+    if (!check.valid) {
+      setLoginError(check.error || 'Please check your password details.');
+      return;
+    }
+
+    setIsSubmittingAuth(true);
+    try {
+      await changeMerchantPassword({
+        email,
+        currentPassword,
+        newPassword,
+      });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      if (isAuthenticated) {
+        setIsChangePasswordModalOpen(false);
+        setBanner({
+          type: 'success',
+          message: 'Your merchant password has been updated securely.',
+        });
+        setTimeout(() => setBanner(null), 4000);
+      } else {
+        setAuthMode('login');
+        setAuthNotice({
+          type: 'success',
+          message: 'Your password has been updated securely. You can now log in with your new password.',
+        });
+      }
+    } catch (err: unknown) {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setLoginError(formatMerchantAuthError(err, 'change_password'));
+    } finally {
+      setIsSubmittingAuth(false);
     }
   };
 
   const handleGoogleLogin = async () => {
     setLoginError(null);
+    setAuthNotice(null);
+    setPendingAccountInfo(null);
+    setIsSubmittingAuth(true);
     try {
       const res = await loginAdminWithGoogle();
       setIsAuthenticated(true);
       setMerchantRole(res.user.role);
       onAuthChange(true);
       await loadData();
-    } catch (err: any) {
-      setLoginError(err.message || 'Google sign-in failed or account is not an authorized store administrator.');
+    } catch (err: unknown) {
+      const pending =
+        typeof err === 'object' && err !== null && 'pendingAccount' in err
+          ? (err as { pendingAccount?: UnapprovedAccountDetails }).pendingAccount || null
+          : null;
+      if (pending) {
+        setPendingAccountInfo(pending);
+      }
+      const formatted = formatMerchantAuthError(err, 'google');
+      if (
+        formatted.includes('Account created, but merchant access has not been granted') ||
+        formatted.includes('Website administrative access for this account has been revoked')
+      ) {
+        setAuthNotice({ type: 'warning', message: formatted });
+      } else {
+        setLoginError(formatted);
+      }
+    } finally {
+      setIsSubmittingAuth(false);
     }
   };
 
@@ -289,6 +518,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await signOutMerchant();
     setStoredToken(null);
     setOrders([]);
+    setPassword('');
+    setConfirmPassword('');
+    setCurrentPassword('');
+    setNewPassword('');
+    setIsChangePasswordModalOpen(false);
     setIsAuthenticated(false);
     setMerchantRole(null);
     onAuthChange(false);
@@ -420,6 +654,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       mobileLabel: 'Settings',
       icon: <Settings className="w-4 h-4 shrink-0" />,
     },
+    {
+      id: 'users',
+      label: merchantRole === 'admin' ? 'Users & Access' : 'My Account',
+      mobileLabel: 'Access',
+      icon: <Users className="w-4 h-4 shrink-0" />,
+    },
   ];
 
   if (!shouldRender) return null;
@@ -493,19 +733,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="flex items-center gap-2 shrink-0">
             {isAuthenticated && (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                style={{
-                  backgroundColor: 'var(--surface)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                <LogOut className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">Sign Out</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginError(null);
+                    setAuthNotice(null);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                    setShowPassword(false);
+                    setIsChangePasswordModalOpen(true);
+                  }}
+                  className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Change Password</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="px-3 py-2 border text-xs font-medium rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Sign Out</span>
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -575,9 +838,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               Opening your merchant workspace...
             </div>
           ) : !isAuthenticated ? (
-            /* SIMPLE SIGN-IN SCREEN */
+            /* MERCHANT LOGIN, CREATE ACCOUNT, FORGOT PASSWORD & CHANGE PASSWORD SCREEN */
             <div
-              className="max-w-md mx-auto my-8 p-6 sm:p-8 border rounded-xl shadow-xs text-center"
+              className="max-w-md mx-auto my-6 p-6 sm:p-8 border rounded-xl shadow-xs text-center"
               style={{
                 backgroundColor: 'var(--surface-elevated)',
                 borderColor: 'var(--border)',
@@ -591,112 +854,755 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   color: 'var(--primary)',
                 }}
               >
-                <Lock className="w-5 h-5" />
+                {authMode === 'signup' ? (
+                  <UserPlus className="w-5 h-5" />
+                ) : authMode === 'forgot' ? (
+                  <Mail className="w-5 h-5" />
+                ) : authMode === 'change_password' ? (
+                  <KeyRound className="w-5 h-5" />
+                ) : (
+                  <Lock className="w-5 h-5" />
+                )}
               </div>
 
               <h3 className="font-serif text-2xl font-semibold" style={{ color: 'var(--text-main)' }}>
-                Store Owner Sign In
+                {authMode === 'signup'
+                  ? 'Create Merchant Account'
+                  : authMode === 'forgot'
+                  ? 'Reset Merchant Password'
+                  : authMode === 'change_password'
+                  ? 'Change Merchant Password'
+                  : 'Merchant Sign In'}
               </h3>
-              <p className="text-xs mt-1 mb-5 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Sign in to manage your products, check customer orders, and customize your store.
+              <p className="text-xs mt-1 mb-4 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                {authMode === 'signup'
+                  ? 'Create your own email and password account. The store owner must authorize your UID before dashboard access is enabled.'
+                  : authMode === 'forgot'
+                  ? 'Enter your email address to receive a secure password reset link from Firebase Authentication.'
+                  : authMode === 'change_password'
+                  ? 'Verify your current password to securely update your merchant password.'
+                  : 'Sign in with your authorized merchant email and password or Google account.'}
               </p>
+
+              {/* Mode Switch Tabs */}
+              <div
+                className="grid grid-cols-3 gap-1 p-1 rounded-lg border mb-5"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <button
+                  id="merchant-tab-login"
+                  type="button"
+                  onClick={() => switchAuthMode('login')}
+                  className="py-2 px-2 rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: authMode === 'login' ? 'var(--primary)' : 'transparent',
+                    color: authMode === 'login' ? 'var(--btn-text)' : 'var(--text-secondary)',
+                  }}
+                >
+                  Login
+                </button>
+                <button
+                  id="merchant-tab-signup"
+                  type="button"
+                  onClick={() => switchAuthMode('signup')}
+                  className="py-2 px-2 rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: authMode === 'signup' ? 'var(--primary)' : 'transparent',
+                    color: authMode === 'signup' ? 'var(--btn-text)' : 'var(--text-secondary)',
+                  }}
+                >
+                  Create Account
+                </button>
+                <button
+                  id="merchant-tab-forgot"
+                  type="button"
+                  onClick={() => switchAuthMode('forgot')}
+                  className="py-2 px-2 rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: authMode === 'forgot' ? 'var(--primary)' : 'transparent',
+                    color: authMode === 'forgot' ? 'var(--btn-text)' : 'var(--text-secondary)',
+                  }}
+                >
+                  Forgot Password
+                </button>
+              </div>
+
+              {authNotice && (
+                <div
+                  id="merchant-auth-notice"
+                  role="status"
+                  className="mb-4 p-3.5 border rounded-lg text-xs text-left leading-relaxed flex items-start gap-2.5"
+                  style={{
+                    backgroundColor:
+                      authNotice.type === 'warning'
+                        ? 'rgba(217, 119, 6, 0.1)'
+                        : 'var(--success-bg)',
+                    borderColor:
+                      authNotice.type === 'warning'
+                        ? 'rgba(217, 119, 6, 0.4)'
+                        : 'var(--success-border)',
+                    color:
+                      authNotice.type === 'warning' ? 'var(--text-main)' : 'var(--success-text)',
+                  }}
+                >
+                  {authNotice.type === 'warning' ? (
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  )}
+                  <span>{authNotice.message}</span>
+                </div>
+              )}
+
+              {pendingAccountInfo && (
+                <div
+                  id="merchant-pending-status-card"
+                  className="mb-4 p-3.5 border rounded-lg text-xs text-left space-y-2"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>
+                        {pendingAccountInfo.status === 'revoked'
+                          ? 'Account Status: Access Revoked'
+                          : 'Account Status: Pending Admin Approval'}
+                      </span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-500/15 text-amber-700 border border-amber-500/30">
+                      {pendingAccountInfo.status === 'revoked' ? 'Revoked' : 'Unapproved'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] space-y-1" style={{ color: 'var(--text-secondary)' }}>
+                    <div>
+                      Email: <strong>{pendingAccountInfo.email}</strong>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span>UID:</span>
+                      <code
+                        className="px-1.5 py-0.5 rounded border font-mono text-[10px] truncate"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                        }}
+                      >
+                        {pendingAccountInfo.uid}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(pendingAccountInfo.uid);
+                            setCopiedPendingUid(true);
+                            setTimeout(() => setCopiedPendingUid(false), 2000);
+                          } catch {}
+                        }}
+                        aria-label="Copy registered UID"
+                        className="px-1.5 py-0.5 rounded border text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                        }}
+                      >
+                        {copiedPendingUid ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy UID</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {loginError && (
                 <div
-                  className="mb-4 p-3 border rounded-lg text-xs text-left"
+                  id="merchant-auth-error"
+                  role="alert"
+                  className="mb-4 p-3 border rounded-lg text-xs text-left leading-relaxed flex items-start gap-2"
                   style={{
                     backgroundColor: 'var(--error-bg)',
                     borderColor: 'var(--error-border)',
                     color: 'var(--error-text)',
                   }}
                 >
-                  {loginError}
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{loginError}</span>
                 </div>
               )}
 
               <div className="space-y-4 text-left">
-                <button
-                  type="button"
-                  onClick={handleGoogleLogin}
-                  className="w-full py-3 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow flex items-center justify-center gap-2 cursor-pointer"
-                  style={{
-                    backgroundColor: 'var(--primary)',
-                    color: 'var(--btn-text)',
-                  }}
-                >
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
-                  <span>Sign in with Google (Store Owner)</span>
-                </button>
+                {/* 1. LOGIN FORM */}
+                {authMode === 'login' && (
+                  <>
+                    <form onSubmit={handleLogin} className="space-y-3.5">
+                      <div>
+                        <label
+                          htmlFor="merchant-login-email"
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Merchant Email
+                        </label>
+                        <input
+                          id="merchant-login-email"
+                          type="email"
+                          required
+                          autoComplete="email"
+                          placeholder="Enter your merchant email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
 
-                <div className="relative flex items-center py-1">
-                  <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
-                  <span className="shrink-0 mx-3 text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
-                    Or Administrator Email
-                  </span>
-                  <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
-                </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label
+                            htmlFor="merchant-login-password"
+                            className="block text-xs font-semibold"
+                            style={{ color: 'var(--text-main)' }}
+                          >
+                            Password
+                          </label>
+                          <button
+                            id="merchant-forgot-password-link"
+                            type="button"
+                            onClick={() => switchAuthMode('forgot')}
+                            className="text-[11px] font-semibold underline cursor-pointer"
+                            style={{ color: 'var(--primary)' }}
+                          >
+                            Forgot Password?
+                          </button>
+                        </div>
+                        <div className="relative flex items-center">
+                          <input
+                            id="merchant-login-password"
+                            type={showPassword ? 'text' : 'password'}
+                            required
+                            autoComplete="current-password"
+                            placeholder="Enter your password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full p-2.5 pr-20 border rounded-lg text-xs"
+                            style={{
+                              backgroundColor: 'var(--input-bg)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-main)',
+                            }}
+                          />
+                          <button
+                            id="merchant-toggle-password"
+                            type="button"
+                            onClick={() => setShowPassword((prev) => !prev)}
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}
+                            className="absolute right-2 px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            {showPassword ? (
+                              <>
+                                <EyeOff className="w-3.5 h-3.5" />
+                                <span>Hide</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Show</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
 
-                <form onSubmit={handleLogin} className="space-y-3">
-                  <div>
-                    <label
-                      htmlFor="merchant-login-email"
-                      className="block text-xs font-semibold mb-1"
-                      style={{ color: 'var(--text-main)' }}
-                    >
-                      Administrator Email
-                    </label>
-                    <input
-                      id="merchant-login-email"
-                      type="email"
-                      required
-                      placeholder="Enter authorized admin email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full p-2.5 border rounded-lg text-xs"
+                      <button
+                        id="merchant-login-submit"
+                        type="submit"
+                        disabled={isSubmittingAuth}
+                        className="w-full py-3 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        <Lock className="w-3.5 h-3.5 shrink-0" />
+                        <span>{isSubmittingAuth ? 'Signing In...' : 'Login'}</span>
+                      </button>
+                    </form>
+
+                    <div className="flex items-center justify-between pt-1 text-xs">
+                      <button
+                        id="merchant-create-account-link"
+                        type="button"
+                        onClick={() => switchAuthMode('signup')}
+                        className="font-semibold underline cursor-pointer"
+                        style={{ color: 'var(--primary)' }}
+                      >
+                        Create Account
+                      </button>
+                      <button
+                        id="merchant-change-password-link"
+                        type="button"
+                        onClick={() => switchAuthMode('change_password')}
+                        className="font-medium underline cursor-pointer"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        Change Password
+                      </button>
+                    </div>
+
+                    <div className="relative flex items-center py-1">
+                      <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
+                      <span
+                        className="shrink-0 mx-3 text-[10px] uppercase tracking-widest"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        Or Continue With
+                      </span>
+                      <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
+                    </div>
+
+                    <button
+                      id="merchant-google-login"
+                      type="button"
+                      disabled={isSubmittingAuth}
+                      onClick={handleGoogleLogin}
+                      className="w-full py-2.5 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg border transition-opacity hover:opacity-90 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                       style={{
-                        backgroundColor: 'var(--input-bg)',
+                        backgroundColor: 'var(--surface)',
                         borderColor: 'var(--border)',
                         color: 'var(--text-main)',
                       }}
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="merchant-login-password"
-                      className="block text-xs font-semibold mb-1"
-                      style={{ color: 'var(--text-main)' }}
                     >
-                      Password
-                    </label>
-                    <input
-                      id="merchant-login-password"
-                      type="password"
-                      required
-                      placeholder="Enter your Firebase Auth password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full p-2.5 border rounded-lg text-xs"
+                      <ShieldCheck className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
+                      <span>Sign in with Google</span>
+                    </button>
+                  </>
+                )}
+
+                {/* 2. CREATE ACCOUNT FORM */}
+                {authMode === 'signup' && (
+                  <>
+                    <form onSubmit={handleCreateAccount} className="space-y-3.5">
+                      <div>
+                        <label
+                          htmlFor="merchant-signup-name"
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Full Name / Operator Name (Optional)
+                        </label>
+                        <input
+                          id="merchant-signup-name"
+                          type="text"
+                          autoComplete="name"
+                          maxLength={100}
+                          placeholder="e.g. Boutique Store Operator"
+                          value={signupDisplayName}
+                          onChange={(e) => setSignupDisplayName(e.target.value)}
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="merchant-signup-email"
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Merchant Email
+                        </label>
+                        <input
+                          id="merchant-signup-email"
+                          type="email"
+                          required
+                          autoComplete="email"
+                          placeholder="Enter your email address"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="merchant-signup-password"
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Choose Password (minimum 6 characters)
+                        </label>
+                        <div className="relative flex items-center">
+                          <input
+                            id="merchant-signup-password"
+                            type={showPassword ? 'text' : 'password'}
+                            required
+                            minLength={6}
+                            autoComplete="new-password"
+                            placeholder="Create a strong password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full p-2.5 pr-20 border rounded-lg text-xs"
+                            style={{
+                              backgroundColor: 'var(--input-bg)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-main)',
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword((prev) => !prev)}
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}
+                            className="absolute right-2 px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            {showPassword ? (
+                              <>
+                                <EyeOff className="w-3.5 h-3.5" />
+                                <span>Hide</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Show</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="merchant-signup-confirm-password"
+                          className="block text-xs font-semibold mb-1"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          Confirm Password
+                        </label>
+                        <input
+                          id="merchant-signup-confirm-password"
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          minLength={6}
+                          autoComplete="new-password"
+                          placeholder="Re-enter your password"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          className="w-full p-2.5 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+
+                      <button
+                        id="merchant-signup-submit"
+                        type="submit"
+                        disabled={isSubmittingAuth}
+                        className="w-full py-3 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        <UserPlus className="w-4 h-4 shrink-0" />
+                        <span>{isSubmittingAuth ? 'Creating Account...' : 'Create Account'}</span>
+                      </button>
+                    </form>
+
+                    <div className="relative flex items-center py-1">
+                      <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
+                      <span
+                        className="shrink-0 mx-3 text-[10px] uppercase tracking-widest"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        Or Register With
+                      </span>
+                      <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
+                    </div>
+
+                    <button
+                      id="merchant-google-signup"
+                      type="button"
+                      disabled={isSubmittingAuth}
+                      onClick={handleGoogleLogin}
+                      className="w-full py-2.5 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg border transition-opacity hover:opacity-90 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                       style={{
-                        backgroundColor: 'var(--input-bg)',
+                        backgroundColor: 'var(--surface)',
                         borderColor: 'var(--border)',
                         color: 'var(--text-main)',
                       }}
-                    />
-                  </div>
+                    >
+                      <ShieldCheck className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
+                      <span>Continue with Google</span>
+                    </button>
 
-                  <button
-                    type="submit"
-                    className="w-full py-2.5 text-xs font-semibold uppercase tracking-wider rounded-lg border transition-opacity hover:opacity-90 cursor-pointer"
-                    style={{
-                      backgroundColor: 'var(--surface)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  >
-                    Sign In with Email
-                  </button>
-                </form>
+                    <button
+                      type="button"
+                      onClick={() => switchAuthMode('login')}
+                      className="w-full py-2.5 text-xs font-semibold rounded-lg border cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Back to Login
+                    </button>
+                  </>
+                )}
+
+                {/* 3. FORGOT PASSWORD FORM */}
+                {authMode === 'forgot' && (
+                  <form onSubmit={handleForgotPassword} className="space-y-3.5">
+                    <div>
+                      <label
+                        htmlFor="merchant-forgot-email"
+                        className="block text-xs font-semibold mb-1"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Merchant Email
+                      </label>
+                      <input
+                        id="merchant-forgot-email"
+                        type="email"
+                        required
+                        autoComplete="email"
+                        placeholder="Enter your registered email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      id="merchant-forgot-submit"
+                      type="submit"
+                      disabled={isSubmittingAuth}
+                      className="w-full py-3 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
+                    >
+                      <Mail className="w-4 h-4 shrink-0" />
+                      <span>
+                        {isSubmittingAuth ? 'Sending Reset Email...' : 'Send Password Reset Email'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => switchAuthMode('login')}
+                      className="w-full py-2.5 text-xs font-semibold rounded-lg border cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Back to Login
+                    </button>
+                  </form>
+                )}
+
+                {/* 4. CHANGE PASSWORD FORM */}
+                {authMode === 'change_password' && (
+                  <form onSubmit={handleChangePassword} className="space-y-3.5">
+                    <div>
+                      <label
+                        htmlFor="merchant-change-email"
+                        className="block text-xs font-semibold mb-1"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Merchant Email
+                      </label>
+                      <input
+                        id="merchant-change-email"
+                        type="email"
+                        required
+                        autoComplete="email"
+                        placeholder="Enter your merchant email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="merchant-current-password"
+                        className="block text-xs font-semibold mb-1"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Current Password
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          id="merchant-current-password"
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          autoComplete="current-password"
+                          placeholder="Enter current password"
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          className="w-full p-2.5 pr-20 border rounded-lg text-xs"
+                          style={{
+                            backgroundColor: 'var(--input-bg)',
+                            borderColor: 'var(--border)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((prev) => !prev)}
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                          className="absolute right-2 px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          style={{
+                            backgroundColor: 'var(--surface-elevated)',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          {showPassword ? (
+                            <>
+                              <EyeOff className="w-3.5 h-3.5" />
+                              <span>Hide</span>
+                            </>
+                          ) : (
+                            <>
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Show</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="merchant-new-password"
+                        className="block text-xs font-semibold mb-1"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        New Password (minimum 6 characters)
+                      </label>
+                      <input
+                        id="merchant-new-password"
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        autoComplete="new-password"
+                        placeholder="Enter new password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="merchant-confirm-new-password"
+                        className="block text-xs font-semibold mb-1"
+                        style={{ color: 'var(--text-main)' }}
+                      >
+                        Confirm New Password
+                      </label>
+                      <input
+                        id="merchant-confirm-new-password"
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        autoComplete="new-password"
+                        placeholder="Re-enter new password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        className="w-full p-2.5 border rounded-lg text-xs"
+                        style={{
+                          backgroundColor: 'var(--input-bg)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      id="merchant-change-password-submit"
+                      type="submit"
+                      disabled={isSubmittingAuth}
+                      className="w-full py-3 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
+                    >
+                      <KeyRound className="w-4 h-4 shrink-0" />
+                      <span>{isSubmittingAuth ? 'Updating Password...' : 'Update Password'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => switchAuthMode('login')}
+                      className="w-full py-2.5 text-xs font-semibold rounded-lg border cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Back to Login
+                    </button>
+                  </form>
+                )}
 
                 <div
                   className="p-3 rounded-lg text-[11px] border leading-relaxed"
@@ -706,7 +1612,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     color: 'var(--text-secondary)',
                   }}
                 >
-                  Protected by Firebase Authentication & Firestore Security Rules. Only verified store administrators can read customer orders, update order statuses, or edit store settings.
+                  Protected by Firebase Authentication & Firestore Security Rules. Creating an account does not grant automatic access — only accounts authorized in the Firestore <code>admins</code> collection can open the merchant dashboard.
                 </div>
               </div>
             </div>
@@ -2427,15 +3333,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </form>
               )}
+
+              {/* 6. USER MANAGEMENT, HANDOVER & ACCOUNT SETTINGS */}
+              {activeTab === 'users' && (
+                <UserManagementPanel
+                  merchantRole={merchantRole}
+                  onOpenChangePasswordModal={() => {
+                    setLoginError(null);
+                    setAuthNotice(null);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                    setShowPassword(false);
+                    setIsChangePasswordModalOpen(true);
+                  }}
+                  onOwnerHandoverCompleted={() => {
+                    setStoredToken(null);
+                    setOrders([]);
+                    setIsAuthenticated(false);
+                    setMerchantRole(null);
+                    onAuthChange(false);
+                    setAuthMode('login');
+                    setAuthNotice({
+                      type: 'success',
+                      message:
+                        'Website administrative access for your initial owner account has been revoked. The approved Store Admin now holds full website control.',
+                    });
+                  }}
+                />
+              )}
             </div>
           )}
         </div>
 
-        {/* MOBILE BOTTOM NAVIGATION BAR (5 Main Sections for Easy One-Hand Phone Use) */}
+        {/* MOBILE BOTTOM NAVIGATION BAR */}
         {isAuthenticated && !isCheckingAuth && (
           <nav
             aria-label="Mobile merchant navigation"
-            className="sm:hidden grid grid-cols-5 border-t shrink-0"
+            className="sm:hidden grid grid-cols-6 border-t shrink-0"
             style={{
               backgroundColor: 'var(--surface-elevated)',
               borderColor: 'var(--border)',
@@ -2460,6 +3395,198 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               );
             })}
           </nav>
+        )}
+
+        {/* AUTHENTICATED MERCHANT CHANGE PASSWORD MODAL */}
+        {isAuthenticated && isChangePasswordModalOpen && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="change-password-modal-title"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ backgroundColor: 'var(--overlay)' }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIsChangePasswordModalOpen(false);
+            }}
+          >
+            <div
+              className="w-full max-w-md rounded-xl border p-6 shadow-2xl space-y-4"
+              style={{
+                backgroundColor: 'var(--surface)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-main)',
+              }}
+            >
+              <div
+                className="flex items-center justify-between border-b pb-3"
+                style={{ borderColor: 'var(--border)' }}
+              >
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+                  <h3 id="change-password-modal-title" className="font-serif text-lg font-semibold">
+                    Change Merchant Password
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsChangePasswordModalOpen(false)}
+                  aria-label="Close change password modal"
+                  className="p-1.5 rounded-lg border cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--surface-elevated)',
+                    borderColor: 'var(--border)',
+                    color: 'var(--text-main)',
+                  }}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {loginError && (
+                <div
+                  role="alert"
+                  className="p-3 border rounded-lg text-xs leading-relaxed flex items-start gap-2"
+                  style={{
+                    backgroundColor: 'var(--error-bg)',
+                    borderColor: 'var(--error-border)',
+                    color: 'var(--error-text)',
+                  }}
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleChangePassword} className="space-y-3.5">
+                <div>
+                  <label
+                    htmlFor="dashboard-current-password"
+                    className="block text-xs font-semibold mb-1"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    Current Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <input
+                      id="dashboard-current-password"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      autoComplete="current-password"
+                      placeholder="Enter your current password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full p-2.5 pr-20 border rounded-lg text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-2 px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      {showPassword ? (
+                        <>
+                          <EyeOff className="w-3.5 h-3.5" />
+                          <span>Hide</span>
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Show</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="dashboard-new-password"
+                    className="block text-xs font-semibold mb-1"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    New Password (minimum 6 characters)
+                  </label>
+                  <input
+                    id="dashboard-new-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    placeholder="Enter new password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full p-2.5 border rounded-lg text-xs"
+                    style={{
+                      backgroundColor: 'var(--input-bg)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="dashboard-confirm-password"
+                    className="block text-xs font-semibold mb-1"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    Confirm New Password
+                  </label>
+                  <input
+                    id="dashboard-confirm-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    placeholder="Re-enter new password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full p-2.5 border rounded-lg text-xs"
+                    style={{
+                      backgroundColor: 'var(--input-bg)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-main)',
+                    }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsChangePasswordModalOpen(false)}
+                    className="px-4 py-2.5 rounded-lg border text-xs font-semibold cursor-pointer"
+                    style={{
+                      backgroundColor: 'var(--surface-elevated)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingAuth}
+                    className="px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer disabled:opacity-60"
+                    style={{
+                      backgroundColor: 'var(--primary)',
+                      color: 'var(--btn-text)',
+                    }}
+                  >
+                    {isSubmittingAuth ? 'Updating...' : 'Update Password'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
         {/* ADD / EDIT PRODUCT MODAL */}

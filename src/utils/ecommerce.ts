@@ -1527,3 +1527,576 @@ export function shouldAnimateSectionReveal(params: {
   return true;
 }
 
+export type MerchantAuthMode = 'login' | 'signup' | 'forgot' | 'change_password';
+
+export type AdminRecordStatus = 'admin' | 'merchant' | 'revoked';
+export type UserAccountStatus = 'admin' | 'merchant' | 'pending' | 'revoked';
+
+export interface RegisteredUserDoc {
+  uid: string;
+  email: string;
+  displayName?: string;
+  provider?: 'password' | 'google' | 'email' | string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AdminRoleDoc {
+  uid: string;
+  role: AdminRecordStatus;
+  email?: string;
+  displayName?: string;
+  approved_by?: string;
+  handover_to_uid?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ManagedUserAccount {
+  uid: string;
+  email: string;
+  displayName: string;
+  provider: string;
+  status: UserAccountStatus;
+  role: 'admin' | 'merchant' | null;
+  isInitialOwner: boolean;
+  created_at: string;
+  updated_at: string;
+  approved_by?: string;
+}
+
+export const INITIAL_OWNER_UID = 'VrLNKE3naCXN34GDog4tejrwPO13';
+export const INITIAL_OWNER_EMAIL = 'kunalkushwaha969@gmail.com';
+
+export const UNAUTHORIZED_MERCHANT_MESSAGE =
+  'Account created, but merchant access has not been granted. Your registration is now pending approval in the store Admin User Management panel.';
+
+export const REVOKED_MERCHANT_MESSAGE =
+  'Website administrative access for this account has been revoked. Please contact an active Store Admin if you need access restored.';
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isValidEmailFormat(email: string): boolean {
+  return EMAIL_REGEX.test(email.trim());
+}
+
+/**
+ * Pure helper to resolve a user's effective website role ('admin' | 'merchant' | null).
+ * - Verified initial owner (matching BOTH immutable UID VrLNKE3naCXN34GDog4tejrwPO13 and verified email)
+ *   retains 'admin' unless explicitly self-revoked ('revoked' by initial owner).
+ * - Approved accounts in /admins/{uid} receive 'admin' or 'merchant' (or null if 'revoked').
+ */
+export function resolveEffectiveMerchantRole(params: {
+  uid?: string | null;
+  email?: string | null;
+  emailVerified?: boolean;
+  adminDocRole?: unknown;
+  adminDocApprovedBy?: string | null;
+  initialOwnerEmail?: string;
+  initialOwnerUid?: string;
+}): 'admin' | 'merchant' | null {
+  const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
+  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
+  const normalizedEmail = (params.email || '').trim().toLowerCase();
+  const isVerifiedInitialOwner = Boolean(
+    params.uid &&
+    params.uid === ownerUid &&
+    normalizedEmail &&
+    normalizedEmail === ownerEmail &&
+    params.emailVerified === true
+  );
+
+  if (isVerifiedInitialOwner) {
+    const approvedByNormalized =
+      params.adminDocApprovedBy !== undefined && params.adminDocApprovedBy !== null
+        ? String(params.adminDocApprovedBy).trim().toLowerCase()
+        : ownerEmail;
+    if (
+      params.adminDocRole === 'revoked' &&
+      (approvedByNormalized === ownerEmail || approvedByNormalized === ownerUid.toLowerCase())
+    ) {
+      return null;
+    }
+    return 'admin';
+  }
+
+  if (params.adminDocRole === 'revoked') {
+    return null;
+  }
+
+  if (params.adminDocRole === 'admin' || params.adminDocRole === 'merchant') {
+    return params.adminDocRole;
+  }
+
+  return null;
+}
+
+/**
+ * Pure helper that merges /users registrations and /admins role records into a unified,
+ * sorted list of ManagedUserAccount records for the Admin User Management view.
+ */
+export function buildManagedUserAccounts(params: {
+  registeredUsers: RegisteredUserDoc[];
+  adminDocs: AdminRoleDoc[];
+  initialOwnerEmail?: string;
+  initialOwnerUid?: string;
+  currentUser?: {
+    uid: string;
+    email?: string | null;
+    displayName?: string | null;
+    provider?: string;
+    emailVerified?: boolean;
+  } | null;
+}): ManagedUserAccount[] {
+  const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
+  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
+  const byUid = new Map<
+    string,
+    {
+      reg?: RegisteredUserDoc;
+      admin?: AdminRoleDoc;
+    }
+  >();
+
+  for (const reg of params.registeredUsers) {
+    if (!reg || !reg.uid) continue;
+    byUid.set(reg.uid, { ...byUid.get(reg.uid), reg });
+  }
+
+  for (const adm of params.adminDocs) {
+    if (!adm || !adm.uid) continue;
+    byUid.set(adm.uid, { ...byUid.get(adm.uid), admin: adm });
+  }
+
+  if (params.currentUser && params.currentUser.uid) {
+    const existing = byUid.get(params.currentUser.uid) || {};
+    if (!existing.reg) {
+      existing.reg = {
+        uid: params.currentUser.uid,
+        email: params.currentUser.email || '',
+        displayName: params.currentUser.displayName || '',
+        provider: params.currentUser.provider || 'google',
+      };
+    }
+    byUid.set(params.currentUser.uid, existing);
+  }
+
+  const nowIso = new Date().toISOString();
+  const results: ManagedUserAccount[] = [];
+
+  for (const [uid, entry] of byUid.entries()) {
+    const email = (entry.admin?.email || entry.reg?.email || '').trim();
+    const displayName = (entry.reg?.displayName || entry.admin?.displayName || '').trim();
+    const provider = entry.reg?.provider || 'password';
+    const isInitialOwner = Boolean(
+      uid === ownerUid &&
+      email.toLowerCase() === ownerEmail
+    );
+
+    let status: UserAccountStatus = 'pending';
+    let role: 'admin' | 'merchant' | null = null;
+
+    if (isInitialOwner) {
+      const selfRevoked =
+        entry.admin?.role === 'revoked' &&
+        (!entry.admin.approved_by ||
+          entry.admin.approved_by.trim().toLowerCase() === ownerEmail ||
+          entry.admin.approved_by.trim() === ownerUid);
+      if (selfRevoked) {
+        status = 'revoked';
+        role = null;
+      } else {
+        status = 'admin';
+        role = 'admin';
+      }
+    } else if (entry.admin?.role === 'revoked') {
+      status = 'revoked';
+      role = null;
+    } else if (entry.admin?.role === 'admin') {
+      status = 'admin';
+      role = 'admin';
+    } else if (entry.admin?.role === 'merchant') {
+      status = 'merchant';
+      role = 'merchant';
+    } else {
+      status = 'pending';
+      role = null;
+    }
+
+    const createdAt = entry.reg?.created_at || entry.admin?.created_at || nowIso;
+    const updatedAt = entry.admin?.updated_at || entry.reg?.updated_at || createdAt;
+
+    results.push({
+      uid,
+      email: email || `UID: ${uid}`,
+      displayName,
+      provider,
+      status,
+      role,
+      isInitialOwner,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      ...(entry.admin?.approved_by ? { approved_by: entry.admin.approved_by } : {}),
+    });
+  }
+
+  const statusOrder: Record<UserAccountStatus, number> = {
+    pending: 0,
+    admin: 1,
+    merchant: 2,
+    revoked: 3,
+  };
+
+  results.sort((a, b) => {
+    const diff = statusOrder[a.status] - statusOrder[b.status];
+    if (diff !== 0) return diff;
+    return b.updated_at.localeCompare(a.updated_at);
+  });
+
+  return results;
+}
+
+/**
+ * Pure helper to validate whether an Admin role assignment or revocation is safe
+ * and will not lock out the website or allow unauthorized privilege changes.
+ */
+export function validateRoleChangeSafety(params: {
+  actorUid: string;
+  actorEmail?: string | null;
+  actorRole: 'admin' | 'merchant' | null;
+  targetUid: string;
+  targetEmail?: string | null;
+  nextStatus: AdminRecordStatus;
+  accounts: ManagedUserAccount[];
+  initialOwnerEmail?: string;
+  initialOwnerUid?: string;
+}): { allowed: boolean; error?: string } {
+  if (params.actorRole !== 'admin') {
+    return {
+      allowed: false,
+      error: 'Only users with the full Admin role can approve accounts or modify role assignments.',
+    };
+  }
+
+  if (!params.targetUid || !params.targetUid.trim()) {
+    return {
+      allowed: false,
+      error: 'A valid user UID is required.',
+    };
+  }
+
+  const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
+  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
+  const normalizedActorEmail = (params.actorEmail || '').trim().toLowerCase();
+  const isActorInitialOwner = Boolean(
+    params.actorUid === ownerUid &&
+    normalizedActorEmail &&
+    normalizedActorEmail === ownerEmail
+  );
+
+  const targetAccount = params.accounts.find((a) => a.uid === params.targetUid);
+  const normalizedTargetEmail = (params.targetEmail || targetAccount?.email || '')
+    .trim()
+    .toLowerCase();
+  const isTargetInitialOwner =
+    params.targetUid === ownerUid ||
+    Boolean(targetAccount?.isInitialOwner) ||
+    (Boolean(normalizedTargetEmail) && normalizedTargetEmail === ownerEmail);
+
+  // Other admins can NEVER revoke, demote, or modify the initial owner account
+  if (isTargetInitialOwner && (!isActorInitialOwner || params.actorUid !== params.targetUid)) {
+    return {
+      allowed: false,
+      error: 'Other administrators cannot revoke, demote, or modify the initial owner account.',
+    };
+  }
+
+  // Check self-modification rules
+  if (params.actorUid === params.targetUid && params.nextStatus !== 'admin') {
+    if (!isActorInitialOwner || params.nextStatus !== 'revoked') {
+      return {
+        allowed: false,
+        error: 'To prevent accidental lockouts, you cannot demote or revoke your own Admin role.',
+      };
+    }
+  }
+
+  // Whenever an existing Admin is being demoted to merchant or revoked, ensure at least one OTHER active Admin exists
+  const isTargetCurrentlyAdmin =
+    targetAccount?.status === 'admin' ||
+    (params.actorUid === params.targetUid && params.actorRole === 'admin');
+
+  if (isTargetCurrentlyAdmin && params.nextStatus !== 'admin') {
+    const otherActiveAdmins = params.accounts.filter(
+      (a) =>
+        a.uid !== params.targetUid &&
+        a.uid !== ownerUid &&
+        a.status === 'admin' &&
+        (!isTargetInitialOwner ||
+          (!a.isInitialOwner && a.email.trim().toLowerCase() !== ownerEmail))
+    );
+    if (otherActiveAdmins.length === 0) {
+      return {
+        allowed: false,
+        error:
+          'Cannot revoke or demote the last active Admin. Please approve another Admin account first and verify they can sign in.',
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Pure helper to evaluate whether the initial owner can safely perform the one-time
+ * website access handover (revoking their own website-level Admin access).
+ */
+export function canInitialOwnerHandover(params: {
+  currentUserUid: string;
+  currentUserEmail?: string | null;
+  accounts: ManagedUserAccount[];
+  initialOwnerEmail?: string;
+  initialOwnerUid?: string;
+}): {
+  isCurrentUserInitialOwner: boolean;
+  canHandover: boolean;
+  activeOtherAdmins: ManagedUserAccount[];
+  reason?: string;
+} {
+  const ownerEmail = (params.initialOwnerEmail || INITIAL_OWNER_EMAIL).trim().toLowerCase();
+  const ownerUid = params.initialOwnerUid || INITIAL_OWNER_UID;
+  const normalizedEmail = (params.currentUserEmail || '').trim().toLowerCase();
+  const isCurrentUserInitialOwner = Boolean(
+    params.currentUserUid === ownerUid &&
+    normalizedEmail &&
+    normalizedEmail === ownerEmail
+  );
+
+  const activeOtherAdmins = params.accounts.filter(
+    (a) =>
+      a.uid !== ownerUid &&
+      a.uid !== params.currentUserUid &&
+      a.status === 'admin' &&
+      !a.isInitialOwner &&
+      a.email.trim().toLowerCase() !== ownerEmail
+  );
+
+  if (!isCurrentUserInitialOwner) {
+    return {
+      isCurrentUserInitialOwner: false,
+      canHandover: false,
+      activeOtherAdmins,
+      reason: 'Only the initial owner account can initiate the one-time owner handover.',
+    };
+  }
+
+  if (activeOtherAdmins.length === 0) {
+    return {
+      isCurrentUserInitialOwner: true,
+      canHandover: false,
+      activeOtherAdmins: [],
+      reason:
+        'At least one other account must be approved with the Admin role before you can revoke your own website admin access.',
+    };
+  }
+
+  return {
+    isCurrentUserInitialOwner: true,
+    canHandover: true,
+    activeOtherAdmins,
+  };
+}
+
+export function validateEmailChangeForm(params: {
+  currentEmail?: string | null;
+  newEmail?: string;
+  currentPassword?: string;
+  requiresPassword: boolean;
+}): { valid: boolean; error?: string } {
+  const current = (params.currentEmail || '').trim().toLowerCase();
+  const next = (params.newEmail || '').trim().toLowerCase();
+  const password = params.currentPassword || '';
+
+  if (!next) {
+    return { valid: false, error: 'Please enter the new email address.' };
+  }
+  if (!isValidEmailFormat(next)) {
+    return { valid: false, error: 'Please enter a valid new email address.' };
+  }
+  if (current && next === current) {
+    return {
+      valid: false,
+      error: 'New email address must be different from your current email address.',
+    };
+  }
+  if (params.requiresPassword && !password) {
+    return {
+      valid: false,
+      error: 'Please enter your current password to verify your identity before changing your email.',
+    };
+  }
+  return { valid: true };
+}
+
+export function validateMerchantAuthForm(params: {
+  mode: MerchantAuthMode;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
+  currentPassword?: string;
+  newPassword?: string;
+  requireEmailForPasswordChange?: boolean;
+}): { valid: boolean; error?: string } {
+  const email = (params.email || '').trim();
+  const password = params.password || '';
+  const confirmPassword = params.confirmPassword;
+  const currentPassword = params.currentPassword || '';
+  const newPassword = params.newPassword || '';
+
+  if (
+    params.mode === 'login' ||
+    params.mode === 'signup' ||
+    params.mode === 'forgot' ||
+    (params.mode === 'change_password' && params.requireEmailForPasswordChange)
+  ) {
+    if (!email) {
+      return { valid: false, error: 'Please enter your email address.' };
+    }
+    if (!isValidEmailFormat(email)) {
+      return { valid: false, error: 'Please enter a valid email address.' };
+    }
+  }
+
+  if (params.mode === 'login') {
+    if (!password) {
+      return { valid: false, error: 'Please enter your password.' };
+    }
+    return { valid: true };
+  }
+
+  if (params.mode === 'signup') {
+    if (password.length < 6) {
+      return {
+        valid: false,
+        error: 'Password must be at least 6 characters long.',
+      };
+    }
+    if (confirmPassword !== undefined && password !== confirmPassword) {
+      return {
+        valid: false,
+        error: 'Passwords do not match. Please re-enter your password.',
+      };
+    }
+    return { valid: true };
+  }
+
+  if (params.mode === 'forgot') {
+    return { valid: true };
+  }
+
+  if (params.mode === 'change_password') {
+    if (!currentPassword) {
+      return { valid: false, error: 'Please enter your current password.' };
+    }
+    if (newPassword.length < 6) {
+      return {
+        valid: false,
+        error: 'New password must be at least 6 characters long.',
+      };
+    }
+    if (newPassword === currentPassword) {
+      return {
+        valid: false,
+        error: 'New password must be different from your current password.',
+      };
+    }
+    if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+      return {
+        valid: false,
+        error: 'New passwords do not match. Please confirm your new password.',
+      };
+    }
+    return { valid: true };
+  }
+
+  return { valid: true };
+}
+
+export function formatMerchantAuthError(
+  error: unknown,
+  mode: MerchantAuthMode | 'google' | 'change_email' = 'login'
+): string {
+  const rawMessage = error instanceof Error ? error.message : String(error || '');
+  const rawCode =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+  const combined = `${rawCode} ${rawMessage}`.toLowerCase();
+
+  if (rawMessage.includes('Account created, but merchant access has not been granted')) {
+    return UNAUTHORIZED_MERCHANT_MESSAGE;
+  }
+  if (rawMessage.includes('Website administrative access for this account has been revoked')) {
+    return REVOKED_MERCHANT_MESSAGE;
+  }
+
+  if (combined.includes('auth/email-already-in-use')) {
+    if (mode === 'change_email') {
+      return 'This email address is already in use by another account.';
+    }
+    return 'An account with this email already exists. Please sign in or use Forgot Password to reset your password.';
+  }
+  if (combined.includes('auth/invalid-email')) {
+    return 'Please enter a valid email address.';
+  }
+  if (combined.includes('auth/weak-password')) {
+    return 'Please choose a stronger password (at least 6 characters).';
+  }
+  if (
+    combined.includes('auth/invalid-credential') ||
+    combined.includes('auth/wrong-password') ||
+    combined.includes('auth/user-not-found')
+  ) {
+    if (mode === 'change_password' || mode === 'change_email') {
+      return 'Your current password is incorrect. Please check and try again.';
+    }
+    return 'Invalid email or password. Please check your credentials and try again.';
+  }
+  if (combined.includes('auth/too-many-requests')) {
+    return 'Too many attempts. Please wait a few minutes before trying again or reset your password.';
+  }
+  if (combined.includes('auth/operation-not-allowed')) {
+    if (mode === 'change_email') {
+      return 'Firebase requires verifying your new email address before changing it. Please check the verification link sent to your new email.';
+    }
+    return 'Email/Password sign-in is not enabled yet in Firebase Console. Please enable Email/Password under Authentication → Sign-in method.';
+  }
+  if (combined.includes('auth/requires-recent-login')) {
+    return 'For security, please verify your current password or sign out and sign back in before making this account change.';
+  }
+  if (combined.includes('auth/popup-closed-by-user')) {
+    return 'Google sign-in popup was closed before completing authentication.';
+  }
+  if (combined.includes('auth/network-request-failed')) {
+    return 'Network error. Please check your internet connection and try again.';
+  }
+
+  if (mode === 'signup') {
+    return 'Could not create your account right now. Please verify your details and try again.';
+  }
+  if (mode === 'forgot') {
+    return 'Could not send password reset email right now. Please verify your email address and try again.';
+  }
+  if (mode === 'change_password') {
+    return 'Could not update your password. Please verify your current password and try again.';
+  }
+  if (mode === 'change_email') {
+    return 'Could not initiate email change. Please verify your current password and new email address.';
+  }
+  if (mode === 'google') {
+    return 'Google sign-in could not be completed or this account has not been granted merchant access.';
+  }
+  return 'Invalid email or password, or merchant access has not been granted.';
+}
+
+
