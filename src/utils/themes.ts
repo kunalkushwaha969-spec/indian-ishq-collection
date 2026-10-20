@@ -474,12 +474,15 @@ export const LEGACY_THEME_STORAGE_KEY = 'ishq_theme';
 export const APPEARANCE_MANUAL_KEY = 'ishq_appearance_manual';
 
 /**
- * Resolves a ThemeId from stored values, supporting legacy theme names if present.
+ * Looks up a CoordinatedTheme from a stored ID, name, or legacy JSON string.
+ * Returns null if the input is empty or does not match any known theme.
  */
-export function resolveThemeById(savedIdOrJson?: string | null): CoordinatedTheme {
-  if (!savedIdOrJson) return COORDINATED_THEMES[0];
+export function findThemeById(savedIdOrJson?: string | null): CoordinatedTheme | null {
+  if (!savedIdOrJson) return null;
 
   const trimmed = savedIdOrJson.trim();
+  if (!trimmed) return null;
+
   const direct = COORDINATED_THEMES.find((t) => t.id === trimmed || t.name === trimmed);
   if (direct) return direct;
 
@@ -492,16 +495,91 @@ export function resolveThemeById(savedIdOrJson?: string | null): CoordinatedThem
       }
       if (parsed.name) {
         const nameLower = String(parsed.name).toLowerCase();
-        if (nameLower.includes('emerald')) return COORDINATED_THEMES.find((t) => t.id === 'emerald')!;
-        if (nameLower.includes('plum') || nameLower.includes('peacock')) return COORDINATED_THEMES.find((t) => t.id === 'plum')!;
-        if (nameLower.includes('rose')) return COORDINATED_THEMES.find((t) => t.id === 'rose')!;
-        if (nameLower.includes('terracotta') || nameLower.includes('crimson')) return COORDINATED_THEMES.find((t) => t.id === 'terracotta')!;
-        if (nameLower.includes('ivory')) return COORDINATED_THEMES.find((t) => t.id === 'ivory')!;
+        if (nameLower.includes('emerald')) return COORDINATED_THEMES.find((t) => t.id === 'emerald') || null;
+        if (nameLower.includes('plum') || nameLower.includes('peacock')) return COORDINATED_THEMES.find((t) => t.id === 'plum') || null;
+        if (nameLower.includes('rose')) return COORDINATED_THEMES.find((t) => t.id === 'rose') || null;
+        if (nameLower.includes('terracotta') || nameLower.includes('crimson')) return COORDINATED_THEMES.find((t) => t.id === 'terracotta') || null;
+        if (nameLower.includes('ivory')) return COORDINATED_THEMES.find((t) => t.id === 'ivory') || null;
+        if (nameLower.includes('burgundy')) return COORDINATED_THEMES.find((t) => t.id === 'burgundy') || null;
       }
     }
   } catch {}
 
+  return null;
+}
+
+/**
+ * Resolves a CoordinatedTheme from stored values, falling back to the default theme (Elegant Burgundy).
+ */
+export function resolveThemeById(savedIdOrJson?: string | null): CoordinatedTheme {
+  return findThemeById(savedIdOrJson) || COORDINATED_THEMES[0];
+}
+
+/**
+ * Resolves the initial theme on app load by checking saved localStorage values FIRST
+ * before falling back to the store's default themeId or COORDINATED_THEMES[0].
+ */
+export function resolveInitialTheme(
+  savedThemeId?: string | null,
+  legacySavedTheme?: string | null,
+  defaultThemeId?: string | null
+): CoordinatedTheme {
+  const fromPrimary = findThemeById(savedThemeId);
+  if (fromPrimary) return fromPrimary;
+
+  const fromLegacy = findThemeById(legacySavedTheme);
+  if (fromLegacy) return fromLegacy;
+
+  const fromDefault = findThemeById(defaultThemeId);
+  if (fromDefault) return fromDefault;
+
   return COORDINATED_THEMES[0];
+}
+
+/**
+ * Reads the user's saved theme from localStorage if a valid one exists, or returns null.
+ */
+export function getSavedThemeFromStorage(
+  storage: Pick<Storage, 'getItem'> | null | undefined =
+    typeof window !== 'undefined' ? window.localStorage : null
+): CoordinatedTheme | null {
+  if (!storage) return null;
+  try {
+    const primary = storage.getItem(THEME_STORAGE_KEY);
+    const foundPrimary = findThemeById(primary);
+    if (foundPrimary) return foundPrimary;
+
+    const legacy = storage.getItem(LEGACY_THEME_STORAGE_KEY);
+    const foundLegacy = findThemeById(legacy);
+    if (foundLegacy) return foundLegacy;
+  } catch {}
+  return null;
+}
+
+/**
+ * Saves the selected theme to localStorage under both primary and legacy keys.
+ */
+export function saveThemeToStorage(
+  theme: CoordinatedTheme,
+  storage: Pick<Storage, 'setItem'> | null | undefined =
+    typeof window !== 'undefined' ? window.localStorage : null
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(THEME_STORAGE_KEY, theme.id);
+    storage.setItem(
+      LEGACY_THEME_STORAGE_KEY,
+      JSON.stringify({
+        id: theme.id,
+        name: theme.name,
+        wine: theme.swatches.primary,
+        wine2: theme.light.primaryHover,
+        rose: theme.swatches.secondary,
+        cream: theme.swatches.bg,
+        gold: theme.swatches.accent,
+      })
+    );
+  } catch {}
 }
 
 /**

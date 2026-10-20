@@ -36,6 +36,7 @@ import {
 
 interface StoreCustomizationProps {
   storeSettings: StoreSettings;
+  activeThemeId?: string;
   isSaving: boolean;
   onChangeSettings: (updated: StoreSettings) => void;
   onSaveSettings: (e?: React.FormEvent, customSettings?: StoreSettings) => Promise<void>;
@@ -56,6 +57,7 @@ const DESTINATION_OPTIONS = [
 
 export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
   storeSettings,
+  activeThemeId,
   isSaving,
   onChangeSettings,
   onSaveSettings,
@@ -92,7 +94,7 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
     slides[0] ||
     DEFAULT_HERO_SLIDES[0];
 
-  const activeThemeObj = resolveThemeById(storeSettings.themeId || 'burgundy');
+  const activeThemeObj = resolveThemeById(activeThemeId || storeSettings.themeId || 'burgundy');
   const currentAppearance = storeSettings.defaultAppearance || 'light';
 
   const updateField = <K extends keyof StoreSettings>(key: K, value: StoreSettings[K]) => {

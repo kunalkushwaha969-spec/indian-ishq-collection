@@ -4,10 +4,11 @@ import { initialProducts } from './utils/ecommerce';
 import {
   COORDINATED_THEMES,
   resolveThemeById,
+  resolveInitialTheme,
+  getSavedThemeFromStorage,
+  saveThemeToStorage,
   resolveAppearanceMode,
   applyThemeToDocument,
-  THEME_STORAGE_KEY,
-  LEGACY_THEME_STORAGE_KEY,
   APPEARANCE_MANUAL_KEY,
   type CoordinatedTheme,
   type AppearanceMode,
@@ -108,20 +109,19 @@ export default function App() {
   }, []);
 
   // 1. Coordinated Theme Palette State (6 curated themes)
+  // Read saved theme from localStorage BEFORE applying the default theme
   const [activeTheme, setActiveTheme] = useState<CoordinatedTheme>(() => {
-    try {
-      const savedId =
-        localStorage.getItem(THEME_STORAGE_KEY) ||
-        localStorage.getItem(LEGACY_THEME_STORAGE_KEY) ||
-        storeSettings.themeId;
-      return resolveThemeById(savedId);
-    } catch {
-      return COORDINATED_THEMES[0];
+    const savedTheme = getSavedThemeFromStorage();
+    if (savedTheme) {
+      return savedTheme;
     }
+    return resolveInitialTheme(null, null, storeSettings.themeId);
   });
 
+  // Only fall back to storeSettings.themeId if no user theme is saved in localStorage
   useEffect(() => {
-    if (storeSettings.themeId) {
+    const savedTheme = getSavedThemeFromStorage();
+    if (!savedTheme && storeSettings.themeId) {
       setActiveTheme(resolveThemeById(storeSettings.themeId));
     }
   }, [storeSettings.themeId]);
@@ -171,22 +171,12 @@ export default function App() {
   // Apply theme tokens, appearance mode, and merchant customization overrides to <html>
   useEffect(() => {
     applyThemeToDocument(activeTheme, appearanceMode, storeSettings);
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, activeTheme.id);
-      localStorage.setItem(
-        LEGACY_THEME_STORAGE_KEY,
-        JSON.stringify({
-          id: activeTheme.id,
-          name: activeTheme.name,
-          wine: activeTheme.swatches.primary,
-          wine2: activeTheme.light.primaryHover,
-          rose: activeTheme.swatches.secondary,
-          cream: activeTheme.swatches.bg,
-          gold: activeTheme.swatches.accent,
-        })
-      );
-    } catch {}
   }, [activeTheme, appearanceMode, storeSettings]);
+
+  const handleSelectTheme = useCallback((nextTheme: CoordinatedTheme) => {
+    saveThemeToStorage(nextTheme);
+    setActiveTheme(nextTheme);
+  }, []);
 
   const handleToggleAppearance = useCallback(() => {
     const nextMode: AppearanceMode = appearanceMode === 'dark' ? 'light' : 'dark';
@@ -210,6 +200,7 @@ export default function App() {
   const handleMerchantThemePreviewChange = useCallback(
     (themeId: string, mode: 'light' | 'dark' | 'system') => {
       const nextTheme = resolveThemeById(themeId);
+      saveThemeToStorage(nextTheme);
       setActiveTheme(nextTheme);
       if (mode === 'system') {
         handleSetManualAppearance(null);
@@ -478,7 +469,7 @@ export default function App() {
           setUnreadOrdersCount(0);
         }}
         onRetryFetch={loadLiveProducts}
-        onSelectTheme={setActiveTheme}
+        onSelectTheme={handleSelectTheme}
         onToggleAppearance={handleToggleAppearance}
         onOpenThemeModal={() => setIsCustomizerOpen(true)}
       />
@@ -725,7 +716,7 @@ export default function App() {
                     <button
                       key={preset.id}
                       type="button"
-                      onClick={() => setActiveTheme(preset)}
+                      onClick={() => handleSelectTheme(preset)}
                       className="p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 cursor-pointer"
                       style={{
                         backgroundColor: isSelected
@@ -820,6 +811,7 @@ export default function App() {
 
       <AdminDashboard
         isOpen={isAdminOpen}
+        activeThemeId={activeTheme.id}
         onClose={() => {
           setIsAdminOpen(false);
           if (window.location.hash === '#admin') {

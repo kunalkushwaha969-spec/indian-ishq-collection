@@ -29,6 +29,10 @@
     <script>
       (function() {
         try {
+          var savedTheme = localStorage.getItem('ishq_theme_id');
+          if (savedTheme) {
+            document.documentElement.setAttribute('data-theme', savedTheme);
+          }
           var manualMode = localStorage.getItem('ishq_appearance_manual');
           var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
           var mode = (manualMode === 'dark' || manualMode === 'light') ? manualMode : (sysDark ? 'dark' : 'light');

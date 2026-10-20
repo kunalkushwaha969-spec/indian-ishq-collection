@@ -131,8 +131,14 @@ test('formatINR formats currency strings with rupee sign', () => {
 
 import {
   COORDINATED_THEMES,
+  findThemeById,
   resolveThemeById,
+  resolveInitialTheme,
+  getSavedThemeFromStorage,
+  saveThemeToStorage,
   resolveAppearanceMode,
+  THEME_STORAGE_KEY,
+  LEGACY_THEME_STORAGE_KEY,
 } from './themes.ts';
 
 test('COORDINATED_THEMES defines all 6 required boutique colour themes with light and dark tokens', () => {
@@ -155,6 +161,56 @@ test('resolveThemeById resolves valid theme IDs, legacy objects, and falls back 
   assert.equal(resolveThemeById(JSON.stringify({ name: 'Emerald Maharani' })).id, 'emerald');
   assert.equal(resolveThemeById('unknown-theme').id, 'burgundy');
   assert.equal(resolveThemeById(null).id, 'burgundy');
+});
+
+test('findThemeById returns null when no saved theme exists or when value is invalid', () => {
+  assert.equal(findThemeById(null), null);
+  assert.equal(findThemeById(''), null);
+  assert.equal(findThemeById('invalid-theme-id'), null);
+  assert.equal(findThemeById('emerald')?.id, 'emerald');
+  assert.equal(findThemeById('rose')?.id, 'rose');
+});
+
+test('resolveInitialTheme prioritizes saved localStorage theme over default storeSettings.themeId', () => {
+  // Saved theme in primary storage wins over default 'burgundy'
+  assert.equal(resolveInitialTheme('emerald', null, 'burgundy').id, 'emerald');
+  assert.equal(resolveInitialTheme('terracotta', null, 'burgundy').id, 'terracotta');
+
+  // Legacy saved theme wins when primary is absent
+  assert.equal(
+    resolveInitialTheme(null, JSON.stringify({ id: 'plum', name: 'Royal Plum' }), 'burgundy').id,
+    'plum'
+  );
+
+  // When no saved theme exists in localStorage, falls back to defaultThemeId
+  assert.equal(resolveInitialTheme(null, null, 'rose').id, 'rose');
+  assert.equal(resolveInitialTheme(null, null, 'burgundy').id, 'burgundy');
+  assert.equal(resolveInitialTheme(null, null, null).id, 'burgundy');
+});
+
+test('saveThemeToStorage and getSavedThemeFromStorage persist and restore selected theme across reloads', () => {
+  const store = new Map<string, string>();
+  const mockStorage = {
+    getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
+    setItem: (key: string, val: string) => {
+      store.set(key, val);
+    },
+  };
+
+  // Before saving any theme -> returns null so app uses default theme
+  assert.equal(getSavedThemeFromStorage(mockStorage), null);
+
+  // User selects Emerald theme -> saved to storage
+  const emeraldTheme = resolveThemeById('emerald');
+  saveThemeToStorage(emeraldTheme, mockStorage);
+  assert.equal(store.get(THEME_STORAGE_KEY), 'emerald');
+  assert.ok(store.get(LEGACY_THEME_STORAGE_KEY)?.includes('"id":"emerald"'));
+
+  // On page refresh -> getSavedThemeFromStorage restores 'emerald' before default theme
+  const restored = getSavedThemeFromStorage(mockStorage);
+  assert.ok(restored);
+  assert.equal(restored.id, 'emerald');
+  assert.equal(restored.name, 'Emerald Green');
 });
 
 test('resolveAppearanceMode prioritizes explicit manual choice over system preference', () => {

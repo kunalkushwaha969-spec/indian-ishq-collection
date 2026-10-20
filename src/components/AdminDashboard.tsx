@@ -66,6 +66,7 @@ import {
 
 interface AdminDashboardProps {
   isOpen: boolean;
+  activeThemeId?: string;
   onClose: () => void;
   onCatalogChanged: () => void;
   onAuthChange: (authenticated: boolean) => void;
@@ -76,6 +77,7 @@ type MerchantSectionId = 'dashboard' | 'products' | 'orders' | 'customize' | 'se
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   isOpen,
+  activeThemeId,
   onClose,
   onCatalogChanged,
   onAuthChange,
@@ -1827,6 +1829,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div key="customize" className="animate-fadeIn">
                   <StoreCustomization
                     storeSettings={storeSettings}
+                    activeThemeId={activeThemeId}
                     isSaving={isSavingSettings}
                     onChangeSettings={setStoreSettings}
                     onSaveSettings={handleSaveSettings}
