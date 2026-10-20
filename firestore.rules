@@ -2,6 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Global Safety Net: Default-deny all undefined paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Initial Verified Owner Authentication Identity
     function isInitialOwnerAuth() {
       return request.auth != null
         && request.auth.uid == 'VrLNKE3naCXN34GDog4tejrwpO13'
@@ -11,7 +17,7 @@ service cloud.firestore {
         && request.auth.token.email_verified == true;
     }
 
-    // Initial verified owner retains Admin access UNLESS explicitly self-revoked in /admins/{uid} during handover
+    // Initial verified owner retains Admin authority UNLESS explicitly self-revoked in /admins/{uid} during handover
     function isInitialOwner() {
       return isInitialOwnerAuth()
         && (
@@ -21,7 +27,7 @@ service cloud.firestore {
         );
     }
 
-    // Full Admin role: Initial owner (while not revoked) OR any user with role == 'admin' in /admins/{uid}
+    // Full Admin role: Initial owner (while active) OR verified replacement admin with role == 'admin' in /admins/{uid}
     function isFullAdmin() {
       return isInitialOwner() || (
         request.auth != null
@@ -30,18 +36,19 @@ service cloud.firestore {
       );
     }
 
-    // Store Operator role: either 'admin' or 'merchant' in /admins/{uid}
-    function hasAuthorizedMerchantRole() {
+    // Merchant role: verified active store operator with role == 'merchant' in /admins/{uid}
+    function isMerchant() {
       return request.auth != null
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'merchant'];
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'merchant';
     }
 
-    function isAdmin() {
-      return isInitialOwner() || hasAuthorizedMerchantRole();
+    // Store staff: either full admin or merchant
+    function isStoreStaff() {
+      return isFullAdmin() || isMerchant();
     }
 
-    // Ensures approved_by matches the authenticated actor's verified email or UID, preventing forgery or preservation of fake approvers
+    // Ensures approved_by matches the authenticated actor's verified email or UID, preventing forgery or fake approver preservation
     function isAuthenticApprover(data) {
       return 'approved_by' in data
         && data.approved_by is string
@@ -58,10 +65,15 @@ service cloud.firestore {
         );
     }
 
-    function isTargetInitialOwnerRecord(adminUid) {
+    // Context-safe helpers: Separated for existing documents (safe for delete/update) vs incoming data (safe for create/update)
+    function isExistingInitialOwnerDoc(adminUid) {
       return adminUid == 'VrLNKE3naCXN34GDog4tejrwpO13'
-        || (resource != null && 'email' in resource.data && resource.data.email is string && resource.data.email.lower() == 'kunalkushwaha969@gmail.com')
-        || (request.resource != null && 'email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.lower() == 'kunalkushwaha969@gmail.com');
+        || (resource != null && 'email' in resource.data && resource.data.email is string && resource.data.email.lower() == 'kunalkushwaha969@gmail.com');
+    }
+
+    function isIncomingInitialOwnerDoc(data, adminUid) {
+      return adminUid == 'VrLNKE3naCXN34GDog4tejrwpO13'
+        || ('email' in data && data.email is string && data.email.lower() == 'kunalkushwaha969@gmail.com');
     }
 
     function hasVerifiedReplacementAdmin(data) {
@@ -75,10 +87,10 @@ service cloud.firestore {
     }
 
     function isValidAdminRecord(data, adminUid) {
-      return data.keys().hasAll(['role', 'approved_by'])
+      return data.keys().hasAll(['uid', 'role', 'approved_by'])
         && data.keys().hasOnly(['uid', 'role', 'email', 'displayName', 'approved_by', 'handover_to_uid', 'created_at', 'updated_at'])
+        && data.uid is string && data.uid == adminUid
         && data.role in ['admin', 'merchant', 'revoked']
-        && (!('uid' in data) || (data.uid is string && data.uid == adminUid))
         && (!('email' in data) || (data.email is string && data.email.size() <= 200))
         && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
         && (!('handover_to_uid' in data) || (data.handover_to_uid is string && data.handover_to_uid.size() <= 128))
@@ -132,23 +144,28 @@ service cloud.firestore {
     }
 
     // Admins lookup collection:
-    // Each document ID must equal the Firebase Authentication UID and contain role: "admin", "merchant", or "revoked".
-    // Only full Admins can list or modify /admins.
-    // The Initial Owner (UID: VrLNKE3naCXN34GDog4tejrwpO13) is protected directly by UID:
-    // Non-owner administrators can NEVER create, overwrite, demote, revoke, or delete the initial owner's admin record.
-    // Non-initial-owner Admins cannot demote or delete their own UID. Initial-owner self-revocation requires a verified replacement Admin.
+    // Only the verified initial owner UID can create, promote, demote, revoke, or delete operator/admin records.
+    // Existing non-owner admins cannot grant admin privileges to other users.
+    // The initial owner's admin record cannot be modified or deleted by another account.
     match /admins/{adminUid} {
-      allow get: if request.auth != null && (request.auth.uid == adminUid || isFullAdmin());
-      allow list: if isFullAdmin();
-      allow create, update: if isFullAdmin()
+      allow get: if request.auth != null && (request.auth.uid == adminUid || isInitialOwner());
+      allow list: if isInitialOwner();
+
+      // Create: Owner can approve a new operator (cannot create a duplicate initial owner doc)
+      allow create: if isInitialOwner()
+        && isValidAdminRecord(request.resource.data, adminUid)
+        && !isIncomingInitialOwnerDoc(request.resource.data, adminUid)
+        && request.auth.uid != adminUid;
+
+      // Update: Owner can promote, demote, or revoke an operator, or execute verified replacement handover
+      allow update: if isInitialOwner()
         && isValidAdminRecord(request.resource.data, adminUid)
         && (
-          !isTargetInitialOwnerRecord(adminUid)
-          || (isInitialOwnerAuth() && request.auth.uid == 'VrLNKE3naCXN34GDog4tejrwpO13' && adminUid == 'VrLNKE3naCXN34GDog4tejrwpO13')
-        )
-        && (
-          request.auth.uid != adminUid
-          || request.resource.data.role == 'admin'
+          (
+            !isIncomingInitialOwnerDoc(request.resource.data, adminUid)
+            && !isExistingInitialOwnerDoc(adminUid)
+            && request.auth.uid != adminUid
+          )
           || (
             isInitialOwnerAuth()
             && adminUid == 'VrLNKE3naCXN34GDog4tejrwpO13'
@@ -161,15 +178,17 @@ service cloud.firestore {
             && hasVerifiedReplacementAdmin(request.resource.data)
           )
         );
-      allow delete: if isFullAdmin()
+
+      // Delete: Owner can remove an operator record (cannot delete initial owner doc or self)
+      allow delete: if isInitialOwner()
         && request.auth.uid != adminUid
-        && !isTargetInitialOwnerRecord(adminUid)
-        && adminUid != 'VrLNKE3naCXN34GDog4tejrwpO13';
+        && !isExistingInitialOwnerDoc(adminUid);
     }
 
     // Registered users directory:
-    // Authenticated users can only create/update their own profile with their verified Auth token email (no cross-account edits or impersonation).
-    // The initial owner's email is protected: no other UID can register with kunalkushwaha969@gmail.com.
+    // Users create/update only their own profile with their verified token email.
+    // The initial owner's email is protected: no other UID can claim kunalkushwaha969@gmail.com.
+    // Only full store administrators can list registered accounts for approval.
     match /users/{userUid} {
       allow get: if request.auth != null && (request.auth.uid == userUid || isFullAdmin());
       allow list: if isFullAdmin();
@@ -180,28 +199,32 @@ service cloud.firestore {
     }
 
     // Products collection:
-    // Publicly browsable by customers; only authenticated store administrators can create, update, or delete
+    // Publicly browsable by customers;
+    // Full admins and store operators (merchants) can create and update catalog items;
+    // Only full admins can delete products (merchants cannot delete products).
     match /products/{productId} {
       allow read: if true;
-      allow create, update: if isAdmin() && isValidProduct(request.resource.data);
-      allow delete: if isAdmin();
+      allow create, update: if isStoreStaff() && isValidProduct(request.resource.data);
+      allow delete: if isFullAdmin();
     }
 
     // Orders collection:
-    // Customers can submit new orders (initial status Pending / Order Received);
-    // Only authenticated store administrators can read orders or update order status
+    // Public customers submit new orders;
+    // Store staff (admins and merchants) view orders and update fulfillment status;
+    // Only full admins can delete orders.
     match /orders/{orderId} {
-      allow read: if isAdmin();
+      allow read: if isStoreStaff();
       allow create: if isValidNewOrder(request.resource.data);
-      allow update: if isAdmin() && isValidOrderStatus(request.resource.data);
-      allow delete: if isAdmin();
+      allow update: if isStoreStaff() && isValidOrderStatus(request.resource.data);
+      allow delete: if isFullAdmin();
     }
 
     // Store Settings collection:
-    // Publicly readable for storefront rendering; only authenticated store administrators can update
+    // Publicly readable for storefront rendering;
+    // Only full admins can update store settings (merchants cannot change store settings or payment details).
     match /settings/{settingId} {
       allow read: if true;
-      allow create, update: if isAdmin()
+      allow create, update: if isFullAdmin()
         && request.resource.data.storeName is string
         && request.resource.data.storeName.size() > 0
         && request.resource.data.phone is string
@@ -212,4 +235,3 @@ service cloud.firestore {
     }
   }
 }
-
