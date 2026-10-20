@@ -1,6 +1,7 @@
 import React from 'react';
 import type { CartItem, Product, StoreSettings } from '../utils/ecommerce';
 import { calculateCartSummary, formatINR } from '../utils/ecommerce';
+import { useAnimatedMount } from '../utils/useAnimatedMount';
 import { X, ShoppingBag, Trash2, Plus, Minus, Truck, ShieldCheck } from 'lucide-react';
 
 interface CartDrawerProps {
@@ -24,7 +25,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onRemoveItem,
   onProceedToCheckout,
 }) => {
-  if (!isOpen) return null;
+  const { shouldRender, isEntered } = useAnimatedMount(isOpen, 280);
+
+  if (!shouldRender) return null;
 
   const summary = calculateCartSummary(
     cart,
@@ -43,14 +46,18 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="cart-drawer-title"
-      className="fixed inset-0 z-50 flex justify-end transition-opacity overflow-x-hidden"
+      className={`fixed inset-0 z-50 flex justify-end overflow-x-hidden transition-opacity duration-280 ease-out ${
+        isEntered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
       style={{ backgroundColor: 'var(--overlay)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-md h-full flex flex-col justify-between shadow-2xl border-l transition-colors min-w-0"
+        className={`w-full max-w-md h-full flex flex-col justify-between shadow-2xl border-l min-w-0 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isEntered ? 'translate-x-0' : 'translate-x-full'
+        }`}
         style={{
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',
@@ -74,7 +81,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               Your Shopping Bag
             </h3>
             <span
-              className="text-xs px-2 py-0.5 rounded-full font-bold shrink-0"
+              className="text-xs px-2 py-0.5 rounded-full font-bold shrink-0 tabular-nums"
               style={{
                 backgroundColor: 'var(--primary)',
                 color: 'var(--btn-text)',
@@ -87,7 +94,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close shopping bag"
-            className="w-9 h-9 rounded-lg border flex items-center justify-center transition cursor-pointer shrink-0"
+            className="btn-luxury w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer shrink-0"
             style={{
               backgroundColor: 'var(--surface)',
               borderColor: 'var(--border)',
@@ -116,7 +123,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               ) : (
                 <span style={{ color: 'var(--text-secondary)' }}>
                   Add{' '}
-                  <strong style={{ color: 'var(--primary)' }}>
+                  <strong className="tabular-nums" style={{ color: 'var(--primary)' }}>
                     {formatINR(amountRemainingForFree)}
                   </strong>{' '}
                   more for{' '}
@@ -163,7 +170,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="mt-5 px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer"
+                className="btn-luxury mt-5 px-5 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider cursor-pointer"
                 style={{
                   backgroundColor: 'var(--primary)',
                   color: 'var(--btn-text)',
@@ -180,7 +187,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               return (
                 <div
                   key={item.id}
-                  className="flex gap-3 p-3 rounded-xl border shadow-2xs transition min-w-0"
+                  className="flex gap-3 p-3 rounded-xl border shadow-2xs transition-all duration-200 min-w-0"
                   style={{
                     backgroundColor: 'var(--surface-elevated)',
                     borderColor: 'var(--border)',
@@ -203,7 +210,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           type="button"
                           onClick={() => onRemoveItem(item.id)}
                           aria-label={`Remove ${prod.name} from bag`}
-                          className="p-1 transition cursor-pointer shrink-0"
+                          className="btn-luxury p-1 rounded cursor-pointer shrink-0 hover:opacity-80"
                           style={{ color: 'var(--text-muted)' }}
                           title="Remove item"
                         >
@@ -216,7 +223,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       >
                         <span>{prod.category}</span>
                         <span>•</span>
-                        <span>{formatINR(prod.price)} each</span>
+                        <span className="tabular-nums">{formatINR(prod.price)} each</span>
                       </div>
                     </div>
 
@@ -232,7 +239,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           type="button"
                           onClick={() => onUpdateQty(item.id, -1)}
                           aria-label={`Decrease quantity of ${prod.name}`}
-                          className="w-7 h-7 flex items-center justify-center transition cursor-pointer"
+                          className="w-7 h-7 flex items-center justify-center transition-colors active:scale-95 cursor-pointer"
                           style={{ color: 'var(--text-main)' }}
                         >
                           <Minus className="w-3 h-3" />
@@ -245,7 +252,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           disabled={item.qty >= maxStock}
                           onClick={() => onUpdateQty(item.id, 1)}
                           aria-label={`Increase quantity of ${prod.name}`}
-                          className="w-7 h-7 flex items-center justify-center transition disabled:opacity-40 cursor-pointer"
+                          className="w-7 h-7 flex items-center justify-center transition-colors active:scale-95 disabled:opacity-40 cursor-pointer"
                           style={{ color: 'var(--text-main)' }}
                         >
                           <Plus className="w-3 h-3" />
@@ -308,14 +315,14 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             <button
               type="button"
               onClick={onProceedToCheckout}
-              className="w-full py-3.5 rounded-lg text-xs font-semibold uppercase tracking-widest shadow-md hover:opacity-95 transition cursor-pointer flex items-center justify-center gap-2"
+              className="btn-luxury w-full py-3.5 rounded-lg text-xs font-semibold uppercase tracking-widest shadow-md cursor-pointer flex items-center justify-center gap-2"
               style={{
                 backgroundColor: 'var(--primary)',
                 color: 'var(--btn-text)',
               }}
             >
-              <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>Proceed to Secure Checkout</span>
+              <ShoppingBag className="w-4 h-4 shrink-0" />
+              <span>Proceed to Place Order</span>
             </button>
           </div>
         )}

@@ -8,6 +8,12 @@ import {
   resolveSafeProductImage,
 } from '../utils/ecommerce';
 import {
+  auth,
+  isAuthorizedMerchantUser,
+  signInMerchantWithEmail,
+  signInMerchantWithGoogle,
+  signOutMerchant,
+  subscribeToMerchantAuth,
   fetchFirestoreProducts,
   saveFirestoreProduct,
   updateFirestoreProductStock,
@@ -18,7 +24,13 @@ import {
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
 } from './firebase';
-export { subscribeToFirestoreProducts, subscribeToFirestoreOrders };
+export {
+  subscribeToFirestoreProducts,
+  subscribeToFirestoreOrders,
+  subscribeToMerchantAuth,
+  signInMerchantWithGoogle,
+  signOutMerchant,
+};
 
 import { addMerchantActivity } from './activity';
 
@@ -372,11 +384,11 @@ export async function deleteProduct(id: string): Promise<void> {
   });
 }
 
-// Fixed Order Creation (Cleaned of undefined fields so Firestore accepts COD & UPI successfully)
+// Fixed Order Creation (Cleaned of undefined fields so Firestore accepts order payload successfully)
 export async function createOrder(payload: {
   customer_details: CustomerDetails;
   items: OrderItem[];
-  payment_method: 'UPI' | 'COD' | 'RAZORPAY';
+  payment_method?: 'UPI' | 'COD' | 'RAZORPAY' | string;
   upi_ref_id?: string;
   razorpay_payment_id?: string;
   total: number;
@@ -384,8 +396,12 @@ export async function createOrder(payload: {
   const orderId = 'IIC-' + Math.floor(100000 + Math.random() * 900000);
   const now = new Date().toISOString();
 
+  const method =
+    payload.payment_method === 'RAZORPAY' || payload.payment_method === 'UPI'
+      ? payload.payment_method
+      : 'COD';
   const initialStatus = resolveInitialOrderStatus(
-    payload.payment_method,
+    method,
     payload.razorpay_payment_id
   );
 
@@ -404,7 +420,7 @@ export async function createOrder(payload: {
       price: Number(item.price),
       qty: Number(item.qty),
     })),
-    payment_method: payload.payment_method,
+    payment_method: (payload.payment_method as any) || 'COD',
     ...(payload.upi_ref_id ? { upi_ref_id: payload.upi_ref_id } : {}),
     ...(payload.razorpay_payment_id ? { razorpay_payment_id: payload.razorpay_payment_id } : {}),
     status: initialStatus,
@@ -412,28 +428,35 @@ export async function createOrder(payload: {
     created_at: now,
   };
 
-  let placedOrder: Order | null = null;
+  let placedOrder: Order;
 
   try {
     placedOrder = await saveFirestoreOrder(newOrder);
-    const currentProducts = await fetchFirestoreProducts();
-    for (const item of payload.items) {
-      const prod = currentProducts.find((p) => p.id === item.id);
-      if (prod) {
-        const nextStock = Math.max(0, prod.stock - item.qty);
-        await updateFirestoreProductStock(item.id, nextStock);
-      }
-    }
   } catch (err) {
-    console.warn('Firestore order placement warning:', err);
+    console.error('Firestore order placement error:', err);
+    throw new Error(
+      'Unable to save your order to the store database right now. Please verify your internet connection and try again.'
+    );
   }
 
-  if (!placedOrder) {
-    placedOrder = newOrder;
+  // Best-effort stock decrement when called by an authenticated merchant
+  if (auth?.currentUser) {
+    try {
+      const currentProducts = await fetchFirestoreProducts();
+      for (const item of payload.items) {
+        const prod = currentProducts.find((p) => p.id === item.id);
+        if (prod) {
+          const nextStock = Math.max(0, prod.stock - item.qty);
+          await updateFirestoreProductStock(item.id, nextStock);
+        }
+      }
+    } catch {
+      // Non-admin customers cannot mutate /products directly under strict Firestore rules
+    }
   }
 
   const existingOrders = getLocalOrders();
-  setLocalOrders([placedOrder, ...existingOrders.filter((o) => o.id !== placedOrder!.id)]);
+  setLocalOrders([placedOrder, ...existingOrders.filter((o) => o.id !== placedOrder.id)]);
 
   const products = getLocalProducts();
   payload.items.forEach((item) => {
@@ -444,44 +467,35 @@ export async function createOrder(payload: {
   });
   setLocalProducts(products);
 
-  const methodLabel =
-    placedOrder.payment_method === 'UPI'
-      ? 'UPI QR (Pending Verification)'
-      : placedOrder.payment_method === 'RAZORPAY'
-      ? 'Razorpay Online (Paid)'
-      : 'Cash on Delivery (Pay on Delivery)';
-
   addMerchantActivity({
     type: 'order',
-    title: 'New Customer Order Placed',
-    detail: `Order #${placedOrder.id} placed by ${placedOrder.customer_details.name} (₹${placedOrder.total.toLocaleString('en-IN')} via ${methodLabel})`,
+    title: 'New Customer Order Received',
+    detail: `Order #${placedOrder.id} received from ${placedOrder.customer_details.name} (₹${placedOrder.total.toLocaleString('en-IN')}) — Status: ${placedOrder.status}`,
   });
 
   return placedOrder;
 }
 
 export async function fetchOrders(): Promise<Order[]> {
-  try {
-    const list = await fetchFirestoreOrders();
-    if (list && list.length > 0) {
-      setLocalOrders(list);
-      return list;
-    }
-  } catch (err) {
-    console.warn('Firestore fetch orders warning:', err);
+  const isAdmin = await isAuthorizedMerchantUser(auth?.currentUser || null);
+  if (!isAdmin) {
+    throw new Error('Unauthorized: Only authenticated store administrators can view customer orders.');
   }
-  return getLocalOrders();
+  const list = await fetchFirestoreOrders();
+  setLocalOrders(list);
+  return list;
 }
 
 export async function updateOrderStatus(
   orderId: string,
   status: Order['status']
 ): Promise<Order> {
-  try {
-    await updateFirestoreOrderStatus(orderId, status);
-  } catch (err) {
-    console.warn('Firestore update order status warning:', err);
+  const isAdmin = await isAuthorizedMerchantUser(auth?.currentUser || null);
+  if (!isAdmin) {
+    throw new Error('Unauthorized: Only authenticated store administrators can update order status.');
   }
+
+  await updateFirestoreOrderStatus(orderId, status);
 
   const orders = getLocalOrders();
   const found = orders.find((o) => o.id === orderId);
@@ -496,7 +510,7 @@ export async function updateOrderStatus(
       customer_details: { name: 'Customer', phone: '', address: '' },
       items: [],
       status,
-      payment_method: 'UPI',
+      payment_method: 'COD',
       total: 0,
       created_at: new Date().toISOString(),
     };
@@ -515,44 +529,51 @@ export async function loginAdmin(
   password: string,
   email?: string
 ): Promise<{ token: string; user: { email: string; role: string } }> {
-  const normalizedEmail = (email || 'admin@indianishq.com')
-    .trim()
-    .toLowerCase();
-
-  if (
-    password === 'ishq2026' &&
-    normalizedEmail === 'admin@indianishq.com'
-  ) {
-    const demoToken = 'ishq_static_admin_token_' + Date.now();
-
-    setStoredToken(demoToken);
-
-    return {
-      token: demoToken,
-      user: {
-        email: normalizedEmail,
-        role: 'admin',
-      },
-    };
+  const normalizedEmail = (email || '').trim();
+  if (!normalizedEmail || !password) {
+    throw new Error('Please enter both your administrator email and password.');
   }
 
-  throw new Error('Invalid merchant credentials');
+  const firebaseUser = await signInMerchantWithEmail(normalizedEmail, password);
+  const idToken = await firebaseUser.getIdToken();
+  setStoredToken(idToken);
+
+  return {
+    token: idToken,
+    user: {
+      email: firebaseUser.email || normalizedEmail,
+      role: 'admin',
+    },
+  };
 }
 
-export async function verifyAdminSession(
-  token = getStoredToken()
-): Promise<boolean> {
-  if (!token) return false;
+export async function loginAdminWithGoogle(): Promise<{
+  token: string;
+  user: { email: string; role: string };
+}> {
+  const firebaseUser = await signInMerchantWithGoogle();
+  const idToken = await firebaseUser.getIdToken();
+  setStoredToken(idToken);
 
-  const isValidFormat =
-    /^ishq_static_admin_token_\d+$/.test(token);
+  return {
+    token: idToken,
+    user: {
+      email: firebaseUser.email || '',
+      role: 'admin',
+    },
+  };
+}
 
-  if (!isValidFormat) {
+export async function verifyAdminSession(): Promise<boolean> {
+  if (!auth?.currentUser) {
     setStoredToken(null);
     return false;
   }
-
-  return true;
+  const authorized = await isAuthorizedMerchantUser(auth.currentUser);
+  if (!authorized) {
+    setStoredToken(null);
+  }
+  return authorized;
 }
 
 export async function generateUpiQrCode(params: {

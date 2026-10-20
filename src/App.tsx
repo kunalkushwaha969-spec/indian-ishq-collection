@@ -16,9 +16,7 @@ import {
   fetchProducts,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
-  getStoredToken,
-  verifyAdminSession,
-  setStoredToken,
+  subscribeToMerchantAuth,
 } from './services/api';
 import {
   type StoreSettings,
@@ -103,37 +101,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const restoreMerchantSession = async () => {
-      try {
-        const token = getStoredToken();
-        if (!token) {
-          if (!cancelled) {
-            setIsMerchantAuthenticated(false);
-          }
-          return;
-        }
-
-        const valid = await verifyAdminSession(token);
-        if (cancelled) return;
-
-        setIsMerchantAuthenticated(valid);
-        if (!valid) {
-          setStoredToken(null);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Merchant session verification failed:', err);
-        setIsMerchantAuthenticated(false);
-        setStoredToken(null);
-      }
-    };
-
-    restoreMerchantSession();
-    return () => {
-      cancelled = true;
-    };
+    const unsub = subscribeToMerchantAuth((_user, isAdmin) => {
+      setIsMerchantAuthenticated(isAdmin);
+    });
+    return () => unsub();
   }, []);
 
   // 1. Coordinated Theme Palette State (6 curated themes)
@@ -303,6 +274,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!isMerchantAuthenticated) return;
+
     const unsubscribeOrders = subscribeToFirestoreOrders((liveOrders) => {
       if (!initialOrdersLoadedRef.current) {
         liveOrders.forEach((o) => knownOrderIdsRef.current.add(o.id));
@@ -316,7 +289,7 @@ export default function App() {
         setUnreadOrdersCount((prev) => prev + brandNewOrders.length);
         playOrderChime();
 
-        if (getStoredToken() || isAdminOpen) {
+        if (isMerchantAuthenticated || isAdminOpen) {
           const latest = brandNewOrders[0];
           showToast({
             type: 'order',
@@ -333,7 +306,7 @@ export default function App() {
     });
 
     return () => unsubscribeOrders();
-  }, [isAdminOpen, playOrderChime, showToast]);
+  }, [isMerchantAuthenticated, isAdminOpen, playOrderChime, showToast]);
 
   useEffect(() => {
     if (!toast) return;
@@ -472,13 +445,8 @@ export default function App() {
 
     showToast({
       type: 'order',
-      title: 'Order Confirmed',
-      message: `Order #${order.id} (₹${order.total.toLocaleString('en-IN')}) placed successfully.`,
-      actionLabel: 'Merchant Workspace',
-      onAction: () => {
-        setIsAdminOpen(true);
-        setUnreadOrdersCount(0);
-      },
+      title: 'Order Received',
+      message: 'Your order has been received. The seller will contact you to confirm it.',
     });
   };
 

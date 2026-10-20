@@ -14,6 +14,7 @@ import {
   Plus,
   Minus,
 } from 'lucide-react';
+import { useAnimatedMount } from '../utils/useAnimatedMount';
 
 interface ProductModalProps {
   isOpen: boolean;
@@ -61,6 +62,8 @@ export const ProductModal: React.FC<ProductModalProps> = ({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mobileCameraInputRef = useRef<HTMLInputElement | null>(null);
+
+  const { shouldRender, isEntered } = useAnimatedMount(isOpen, 240);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -119,8 +122,6 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     }
     setIsCameraActive(false);
   };
-
-  if (!isOpen) return null;
 
   const validateFormat = (file: File): boolean => {
     const typeValid = ALLOWED_MIME_TYPES.includes(file.type.toLowerCase());
@@ -304,12 +305,16 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     }
   };
 
+  if (!shouldRender) return null;
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="product-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-6 overflow-y-auto"
+      className={`fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-6 overflow-y-auto transition-opacity duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        isEntered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
       style={{ backgroundColor: 'var(--overlay)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
@@ -319,7 +324,9 @@ export const ProductModal: React.FC<ProductModalProps> = ({
       }}
     >
       <div
-        className="w-full max-w-[640px] rounded-xl shadow-2xl border my-auto max-h-[92vh] flex flex-col overflow-hidden transition-colors"
+        className={`w-full max-w-[640px] rounded-xl shadow-2xl border my-auto max-h-[92vh] flex flex-col overflow-hidden transition-all duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isEntered ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-2'
+        }`}
         style={{
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',

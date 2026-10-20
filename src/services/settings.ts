@@ -22,6 +22,10 @@ import {
   reorderHeroSlides,
   sanitizeHomepageSections,
   reorderHomepageSections,
+  validateIndianWhatsAppNumber,
+  buildWhatsAppLink,
+  buildCustomerOrderWhatsAppMessage,
+  type WhatsAppValidationResult,
 } from '../utils/ecommerce';
 
 export {
@@ -44,6 +48,10 @@ export {
   reorderHeroSlides,
   sanitizeHomepageSections,
   reorderHomepageSections,
+  validateIndianWhatsAppNumber,
+  buildWhatsAppLink,
+  buildCustomerOrderWhatsAppMessage,
+  type WhatsAppValidationResult,
 };
 
 export const STORE_SETTINGS_STORAGE_KEY = 'ishq_store_settings_v1';
@@ -96,22 +104,25 @@ export async function saveStoreSettings(
     throw new Error('Unauthorized: Only authenticated administrators can update Store Settings.');
   }
 
+  if (!db) {
+    throw new Error('Firestore database is not initialized. Settings could not be saved.');
+  }
+
   const currentSettings = getLocalStoreSettings();
   const clean: StoreSettings = {
     ...mergeAndSanitizeStoreSettings(settings, currentSettings),
     updatedAt: new Date().toISOString(),
   };
 
-  setLocalStoreSettings(clean);
-
-  if (db) {
-    try {
-      const docRef = doc(db, 'settings', 'store');
-      await setDoc(docRef, clean, { merge: true });
-    } catch (err) {
-      console.warn('Firestore save settings notice:', err);
-    }
+  try {
+    const docRef = doc(db, 'settings', 'store');
+    await setDoc(docRef, clean, { merge: true });
+  } catch (err) {
+    console.error('Firestore save settings error:', err);
+    throw new Error('Failed to save Store Settings to Firestore. Please verify administrator permissions and connection.');
   }
+
+  setLocalStoreSettings(clean);
 
   addMerchantActivity({
     type: 'status',

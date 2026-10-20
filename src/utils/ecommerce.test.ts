@@ -8,6 +8,9 @@ import {
   filterProducts,
   calculateCartSummary,
   formatINR,
+  validateIndianWhatsAppNumber,
+  buildWhatsAppLink,
+  buildCustomerOrderWhatsAppMessage,
 } from './ecommerce.ts';
 
 test('generateUpiUri builds valid NPCI URI', () => {
@@ -181,9 +184,10 @@ test('isRazorpayConfigured returns false when credentials are missing or placeho
   assert.equal(isRazorpayConfigured('rzp_live_9876543210XyZ', true), true);
 });
 
-test('resolveInitialOrderStatus prevents unverified Razorpay orders and sets appropriate status for UPI and COD', () => {
+test('resolveInitialOrderStatus prevents unverified Razorpay orders and sets Pending status for standard/COD orders', () => {
   assert.equal(resolveInitialOrderStatus('UPI'), 'Pending UPI Payment');
-  assert.equal(resolveInitialOrderStatus('COD'), 'Confirmed');
+  assert.equal(resolveInitialOrderStatus('COD'), 'Pending');
+  assert.equal(resolveInitialOrderStatus(), 'Pending');
   assert.equal(resolveInitialOrderStatus('RAZORPAY', 'pay_Nz123456789'), 'Confirmed');
 
   assert.throws(() => {
@@ -464,5 +468,183 @@ test('mergeAndSanitizeStoreSettings sanitizes custom colors, typography, radii, 
   assert.equal(merged.heroSlides[0].overlayOpacity, 60);
 });
 
+import {
+  resolveSlideIndex,
+  shouldAnimateSectionReveal,
+} from './ecommerce.ts';
+
+test('resolveSlideIndex wraps around cleanly for next and previous slideshow transitions', () => {
+  assert.equal(resolveSlideIndex(0, 1, 3), 1);
+  assert.equal(resolveSlideIndex(2, 1, 3), 0);
+  assert.equal(resolveSlideIndex(0, -1, 3), 2);
+  assert.equal(resolveSlideIndex(1, -1, 3), 0);
+  assert.equal(resolveSlideIndex(0, 1, 0), 0);
+});
+
+test('shouldAnimateSectionReveal skips hero and respects prefers-reduced-motion or missing IntersectionObserver', () => {
+  assert.equal(
+    shouldAnimateSectionReveal({
+      sectionId: 'hero',
+      prefersReducedMotion: false,
+      hasIntersectionObserver: true,
+    }),
+    false
+  );
+  assert.equal(
+    shouldAnimateSectionReveal({
+      sectionId: 'categories',
+      prefersReducedMotion: true,
+      hasIntersectionObserver: true,
+    }),
+    false
+  );
+  assert.equal(
+    shouldAnimateSectionReveal({
+      sectionId: 'newArrivals',
+      prefersReducedMotion: false,
+      hasIntersectionObserver: false,
+    }),
+    false
+  );
+  assert.equal(
+    shouldAnimateSectionReveal({
+      sectionId: 'bestsellers',
+      prefersReducedMotion: false,
+      hasIntersectionObserver: true,
+    }),
+    true
+  );
+});
+
+test('validateCustomerDetails verifies valid customer inputs for direct order placement', () => {
+  const result = validateCustomerDetails({
+    name: 'Priyanka Verma',
+    phone: '9820112345',
+    address: 'A-304, Green Heights, Andheri West, Mumbai',
+    city: 'Mumbai',
+    pincode: '400053',
+  });
+  assert.equal(result.valid, true);
+  assert.equal(result.error, undefined);
+});
+
+test('validateCustomerDetails rejects invalid or missing fields without requiring payment info', () => {
+  const missingName = validateCustomerDetails({
+    name: ' ',
+    phone: '9820112345',
+    address: 'Green Heights, Mumbai',
+  });
+  assert.equal(missingName.valid, false);
+
+  const invalidPhone = validateCustomerDetails({
+    name: 'Priyanka Verma',
+    phone: '1234567890', // Invalid leading digit for Indian mobile
+    address: 'Green Heights, Mumbai',
+  });
+  assert.equal(invalidPhone.valid, false);
+
+  const shortAddress = validateCustomerDetails({
+    name: 'Priyanka Verma',
+    phone: '9820112345',
+    address: 'Home',
+  });
+  assert.equal(shortAddress.valid, false);
+});
+
+test('resolveInitialOrderStatus sets new customer catalogue orders to Pending until seller confirms', () => {
+  const codStatus = resolveInitialOrderStatus('COD');
+  assert.equal(codStatus, 'Pending');
+  assert.notEqual(codStatus, 'Confirmed');
+});
+
+test('validateIndianWhatsAppNumber handles valid 10-digit Indian numbers with various formats', () => {
+  // Plain 10 digits
+  const plain = validateIndianWhatsAppNumber('9876543210');
+  assert.equal(plain.isValid, true);
+  assert.equal(plain.clean10Digits, '9876543210');
+  assert.equal(plain.waId, '919876543210');
+  assert.equal(plain.formattedDisplay, '+91 98765 43210');
+
+  // With +91 country code and spaces/dashes
+  const formatted = validateIndianWhatsAppNumber('+91 98765-43210');
+  assert.equal(formatted.isValid, true);
+  assert.equal(formatted.clean10Digits, '9876543210');
+  assert.equal(formatted.waId, '919876543210');
+  assert.equal(formatted.formattedDisplay, '+91 98765 43210');
+
+  // With leading 0
+  const leadingZero = validateIndianWhatsAppNumber('09876543210');
+  assert.equal(leadingZero.isValid, true);
+  assert.equal(leadingZero.clean10Digits, '9876543210');
+  assert.equal(leadingZero.waId, '919876543210');
+
+  // With 91 prefix
+  const withPrefix = validateIndianWhatsAppNumber('918765432109');
+  assert.equal(withPrefix.isValid, true);
+  assert.equal(withPrefix.clean10Digits, '8765432109');
+  assert.equal(withPrefix.waId, '918765432109');
+});
+
+test('validateIndianWhatsAppNumber detects unconfigured, invalid, and incomplete numbers', () => {
+  // Empty or undefined
+  const empty = validateIndianWhatsAppNumber('');
+  assert.equal(empty.isValid, false);
+  assert.equal(empty.clean10Digits, '');
+  assert.ok(empty.error?.includes('No WhatsApp number configured'));
+
+  const unconfigured = validateIndianWhatsAppNumber(undefined);
+  assert.equal(unconfigured.isValid, false);
+
+  // Too short
+  const short = validateIndianWhatsAppNumber('98765');
+  assert.equal(short.isValid, false);
+  assert.ok(short.error?.includes('10 digits'));
+
+  // Invalid leading digit for Indian mobile (must be 6-9)
+  const invalidStart = validateIndianWhatsAppNumber('5551234567');
+  assert.equal(invalidStart.isValid, false);
+  assert.ok(invalidStart.error?.includes('start with 6, 7, 8, or 9'));
+});
+
+test('buildWhatsAppLink constructs valid wa.me URLs with encoded messages', () => {
+  const url = buildWhatsAppLink('919876543210', 'Namaste from Indian Ishq Collection!');
+  assert.ok(url.startsWith('https://wa.me/919876543210?text='));
+  assert.ok(url.includes('Namaste%20from%20Indian%20Ishq%20Collection!'));
+
+  // Handles 10-digit number by auto-prefixing 91
+  const url10 = buildWhatsAppLink('9876543210', 'Hello');
+  assert.ok(url10.startsWith('https://wa.me/919876543210?text=Hello'));
+});
+
+test('buildCustomerOrderWhatsAppMessage generates readable message with full order details', () => {
+  const mockOrder = {
+    id: 'ORD-98721',
+    customer_details: {
+      name: 'Ananya Sharma',
+      phone: '9876543210',
+      address: '22 Heritage Lane, C-Scheme',
+      city: 'Jaipur',
+      pincode: '302001',
+    },
+    items: [
+      { id: 'prod-1', name: 'Banarasi Katan Silk Saree', price: 6999, qty: 1 },
+      { id: 'prod-2', name: 'Mulmul Handblock Kurti', price: 1899, qty: 2 },
+    ],
+    total: 10797,
+    status: 'Confirmed' as const,
+    payment_method: 'COD' as const,
+    created_at: new Date().toISOString(),
+  };
+
+  const msg = buildCustomerOrderWhatsAppMessage(mockOrder, 'Indian Ishq Collection', '+91 98765 43210');
+  assert.ok(msg.includes('Namaste Ananya Sharma!'));
+  assert.ok(msg.includes('Order #ORD-98721'));
+  assert.ok(msg.includes('1x Banarasi Katan Silk Saree'));
+  assert.ok(msg.includes('2x Mulmul Handblock Kurti'));
+  assert.ok(msg.includes('3 pcs'));
+  assert.ok(msg.includes('Confirmed'));
+  assert.ok(msg.includes('22 Heritage Lane, C-Scheme, Jaipur - 302001'));
+  assert.ok(msg.includes('+91 98765 43210'));
+});
 
 

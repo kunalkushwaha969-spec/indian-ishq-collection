@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { Product, StoreSettings } from '../utils/ecommerce';
 import { formatINR, DEFAULT_STORE_SETTINGS } from '../utils/ecommerce';
 import {
   Heart,
   Eye,
   ShoppingBag,
+  Check,
   CheckCircle2,
   AlertCircle,
   MessageCircle,
@@ -26,6 +27,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   onSelectProduct,
 }) => {
   const [wishlisted, setWishlisted] = useState(false);
+  const [justAdded, setJustAdded] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (imgRef.current && imgRef.current.complete) {
+      setImageLoaded(true);
+    }
+  }, [product.image_url]);
 
   const isOutOfStock = product.stock <= 0;
   const isLowStock = product.stock > 0 && product.stock <= 3;
@@ -49,9 +59,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       ? Math.round(((product.old_price - product.price) / product.old_price) * 100)
       : 0;
 
+  const handleAddClick = () => {
+    if (isOutOfStock) return;
+    onAddToCart(product);
+    setJustAdded(true);
+    window.setTimeout(() => {
+      setJustAdded(false);
+    }, 900);
+  };
+
   return (
     <article
-      className="rounded-xl overflow-hidden border transition-all duration-300 hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between group min-w-0 max-w-full"
+      className="product-card-luxury rounded-xl overflow-hidden border flex flex-col justify-between group min-w-0 max-w-full"
       style={{
         backgroundColor: 'var(--surface)',
         borderColor: 'var(--border)',
@@ -64,16 +83,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           onClick={() => onSelectProduct(product)}
         >
           <img
+            ref={imgRef}
             src={product.image_url}
             alt={product.name}
             loading="lazy"
             referrerPolicy="no-referrer"
-            className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${
-              isOutOfStock ? 'opacity-50 grayscale' : ''
-            }`}
+            onLoad={() => setImageLoaded(true)}
+            onError={() => setImageLoaded(true)}
+            className={`product-card-img w-full h-full object-cover ${
+              imageLoaded ? 'opacity-100' : 'opacity-0'
+            } ${isOutOfStock ? 'opacity-50 grayscale' : ''}`}
           />
 
-          <div className="absolute top-2.5 left-2.5 flex flex-col gap-1.5 items-start max-w-[78%]">
+          <div className="absolute top-2.5 left-2.5 flex flex-col gap-1.5 items-start max-w-[78%] z-10 pointer-events-none">
             {product.tag && (
               <span
                 className="text-[10px] font-bold px-2.5 py-1 rounded tracking-wider uppercase shadow-sm truncate max-w-full"
@@ -99,14 +121,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
 
           {isOutOfStock && (
-            <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-10">
               <span className="bg-red-800 text-white text-xs font-bold tracking-widest uppercase px-4 py-2 rounded shadow-lg">
                 Sold Out
               </span>
             </div>
           )}
 
-          <div className="absolute top-2.5 right-2.5 flex flex-col gap-2">
+          <div className="absolute top-2.5 right-2.5 flex flex-col gap-2 z-10">
             {showWishlistButton && (
               <button
                 type="button"
@@ -116,14 +138,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                   onWishlistClick(product);
                 }}
                 aria-label={`Save ${product.name} to wishlist`}
-                className="w-9 h-9 rounded-full backdrop-blur-xs flex items-center justify-center shadow-md transition hover:scale-105 cursor-pointer border"
+                className="btn-luxury w-9 h-9 rounded-full backdrop-blur-xs flex items-center justify-center shadow-md cursor-pointer border"
                 style={{
                   backgroundColor: 'var(--surface)',
                   borderColor: 'var(--border)',
                   color: wishlisted ? '#dc2626' : 'var(--primary)',
                 }}
               >
-                <Heart className={`w-4 h-4 ${wishlisted ? 'fill-red-600 text-red-600' : ''}`} />
+                <Heart
+                  className={`w-4 h-4 transition-transform duration-200 ${
+                    wishlisted ? 'fill-red-600 text-red-600 scale-110' : ''
+                  }`}
+                />
               </button>
             )}
 
@@ -135,7 +161,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               }}
               aria-label={`Quick view ${product.name}`}
               title="View Details"
-              className="w-9 h-9 rounded-full backdrop-blur-xs flex items-center justify-center shadow-md transition hover:scale-105 cursor-pointer border"
+              className="btn-luxury w-9 h-9 rounded-full backdrop-blur-xs flex items-center justify-center shadow-md cursor-pointer border"
               style={{
                 backgroundColor: 'var(--surface)',
                 borderColor: 'var(--border)',
@@ -188,7 +214,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
           <h4
             onClick={() => onSelectProduct(product)}
-            className="font-serif text-lg sm:text-xl font-semibold mt-1 cursor-pointer transition-colors line-clamp-1 break-words"
+            className="font-serif text-lg sm:text-xl font-semibold mt-1 cursor-pointer transition-colors duration-200 line-clamp-1 break-words group-hover:opacity-90"
             style={{ color: 'var(--text-main)' }}
           >
             {product.name}
@@ -206,7 +232,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       </div>
 
       <div
-        className="px-3.5 sm:px-4 pb-3.5 sm:pb-4 pt-2 border-t flex flex-col gap-2 min-w-0"
+        className="px-3.5 sm:px-4 pb-3.5 sm:pb-4 pt-2 border-t flex flex-col gap-2 min-w-0 transition-colors duration-200"
         style={{ borderColor: 'var(--border)' }}
       >
         <div className="flex items-center justify-between gap-2 min-w-0">
@@ -230,15 +256,32 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <button
             type="button"
             disabled={isOutOfStock}
-            onClick={() => onAddToCart(product)}
-            className="px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase transition cursor-pointer flex items-center gap-1.5 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={handleAddClick}
+            className="btn-luxury px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase cursor-pointer flex items-center gap-1.5 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
             style={{
-              backgroundColor: isOutOfStock ? 'var(--border)' : 'var(--primary)',
-              color: isOutOfStock ? 'var(--text-muted)' : 'var(--btn-text)',
+              backgroundColor: isOutOfStock
+                ? 'var(--border)'
+                : justAdded
+                ? 'var(--accent)'
+                : 'var(--primary)',
+              color: isOutOfStock
+                ? 'var(--text-muted)'
+                : justAdded
+                ? '#1b1114'
+                : 'var(--btn-text)',
             }}
           >
-            <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
-            <span>{isOutOfStock ? 'Unavailable' : 'Add to Bag'}</span>
+            {justAdded ? (
+              <>
+                <Check className="w-3.5 h-3.5 shrink-0" />
+                <span>Added</span>
+              </>
+            ) : (
+              <>
+                <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+                <span>{isOutOfStock ? 'Unavailable' : 'Add to Bag'}</span>
+              </>
+            )}
           </button>
         </div>
 
@@ -251,7 +294,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             )}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="w-full py-1.5 px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1.5 transition hover:opacity-90"
+            className="btn-luxury w-full py-1.5 px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1.5"
             style={{
               backgroundColor: 'var(--surface-elevated)',
               borderColor: 'var(--border)',

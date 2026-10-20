@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { Product, StoreSettings } from '../utils/ecommerce';
 import { formatINR, DEFAULT_STORE_SETTINGS } from '../utils/ecommerce';
+import { useAnimatedMount } from '../utils/useAnimatedMount';
 import {
   X,
   ShoppingBag,
@@ -27,10 +28,20 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onAddToCart,
   onWishlistClick,
 }) => {
-  const isSaree = product?.category.toLowerCase() === 'sarees';
+  const [renderedProduct, setRenderedProduct] = useState<Product | null>(product);
+  const { shouldRender, isEntered } = useAnimatedMount(Boolean(product), 220);
+
+  useEffect(() => {
+    if (product) {
+      setRenderedProduct(product);
+    }
+  }, [product]);
+
+  const activeProduct = product || renderedProduct;
+  const isSaree = activeProduct?.category.toLowerCase() === 'sarees';
   const availableSizes =
-    product?.sizes && product.sizes.length > 0
-      ? product.sizes
+    activeProduct?.sizes && activeProduct.sizes.length > 0
+      ? activeProduct.sizes
       : isSaree
       ? ['Free Size (5.5m + Blouse)']
       : ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
@@ -56,24 +67,28 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [product, onClose]);
 
-  if (!product) return null;
+  if (!shouldRender || !activeProduct) return null;
 
-  const isOutOfStock = product.stock <= 0;
-  const cleanWhatsapp = (storeSettings.whatsapp || '919876543210').replace(/\D/g, '');
+  const isOutOfStock = activeProduct.stock <= 0;
+  const cleanWhatsapp = (storeSettings.whatsapp || '').replace(/\D/g, '');
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="pdp-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto"
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto transition-opacity duration-220 ease-out ${
+        isEntered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
       style={{ backgroundColor: 'var(--overlay)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-4xl rounded-xl border shadow-2xl overflow-hidden grid grid-cols-1 md:grid-cols-2 my-auto transition-colors"
+        className={`w-full max-w-4xl rounded-xl border shadow-2xl overflow-hidden grid grid-cols-1 md:grid-cols-2 my-auto transition-all duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isEntered ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.96] translate-y-2'
+        }`}
         style={{
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',
@@ -85,16 +100,19 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           className="relative aspect-[3/4] md:aspect-auto md:min-h-[480px] overflow-hidden"
           style={{ backgroundColor: 'var(--surface-elevated)' }}
         >
-          {product.image_url ? (
+          {activeProduct.image_url ? (
             <img
-              src={product.image_url}
-              alt={product.name}
+              src={activeProduct.image_url}
+              alt={activeProduct.name}
               referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover transition-transform duration-700 hover:scale-[1.03]"
             />
           ) : (
-            <div className="w-full h-full flex items-center justify-center font-serif italic text-lg" style={{ color: 'var(--text-muted)' }}>
-              {product.category}
+            <div
+              className="w-full h-full flex items-center justify-center font-serif italic text-lg"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {activeProduct.category}
             </div>
           )}
 
@@ -117,12 +135,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             <div className="flex items-center justify-between gap-2 mb-3">
               <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                 <span className="uppercase tracking-widest font-semibold" style={{ color: 'var(--accent)' }}>
-                  {product.category}
+                  {activeProduct.category}
                 </span>
-                {product.tag && (
+                {activeProduct.tag && (
                   <>
                     <span aria-hidden="true">·</span>
-                    <span>{product.tag}</span>
+                    <span>{activeProduct.tag}</span>
                   </>
                 )}
               </div>
@@ -131,7 +149,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 type="button"
                 onClick={onClose}
                 aria-label="Close product details"
-                className="p-2 rounded-lg transition-colors cursor-pointer"
+                className="btn-luxury p-2 rounded-lg cursor-pointer"
                 style={{ color: 'var(--text-muted)' }}
               >
                 <X className="w-5 h-5" />
@@ -144,49 +162,68 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               className="font-serif text-2xl sm:text-3xl font-semibold leading-tight mb-3"
               style={{ color: 'var(--text-main)' }}
             >
-              {product.name}
+              {activeProduct.name}
             </h2>
 
             {/* Price & Availability */}
-            <div className="flex items-baseline gap-3 pb-4 mb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+            <div
+              className="flex items-baseline gap-3 pb-4 mb-5 border-b"
+              style={{ borderColor: 'var(--border)' }}
+            >
               <span className="text-2xl font-bold tabular-nums" style={{ color: 'var(--primary)' }}>
-                {formatINR(product.price)}
+                {formatINR(activeProduct.price)}
               </span>
-              {product.old_price && product.old_price > product.price && (
-                <span className="text-sm line-through tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                  {formatINR(product.old_price)}
+              {activeProduct.old_price && activeProduct.old_price > activeProduct.price && (
+                <span
+                  className="text-sm line-through tabular-nums"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {formatINR(activeProduct.old_price)}
                 </span>
               )}
-              <span className="ml-auto text-xs font-medium tabular-nums" style={{ color: isOutOfStock ? 'var(--error-text)' : 'var(--text-muted)' }}>
-                {isOutOfStock ? 'Out of stock' : `${product.stock} pieces available`}
+              <span
+                className="ml-auto text-xs font-medium tabular-nums"
+                style={{ color: isOutOfStock ? 'var(--error-text)' : 'var(--text-muted)' }}
+              >
+                {isOutOfStock ? 'Out of stock' : `${activeProduct.stock} pieces available`}
               </span>
             </div>
 
             {/* Craft & Fabric Details */}
             <div className="space-y-3 mb-6">
-              {product.description && (
+              {activeProduct.description && (
                 <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                  <span
+                    className="text-xs font-semibold uppercase tracking-wider block mb-1"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     Description
                   </span>
                   <p className="text-sm leading-relaxed" style={{ color: 'var(--text-main)' }}>
-                    {product.description}
+                    {activeProduct.description}
                   </p>
                 </div>
               )}
               <div>
-                <span className="text-xs font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                <span
+                  className="text-xs font-semibold uppercase tracking-wider block mb-1"
+                  style={{ color: 'var(--text-muted)' }}
+                >
                   Fabric & Craftsmanship
                 </span>
                 <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                  {product.fabric || 'Handcrafted Indian ethnic silhouette tailored with breathable heritage textiles and artisanal finishing.'}
+                  {activeProduct.fabric ||
+                    'Handcrafted Indian ethnic silhouette tailored with breathable heritage textiles and artisanal finishing.'}
                 </p>
               </div>
 
               {/* Size Selection */}
               <div className="pt-2">
                 <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                  <span
+                    className="font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
                     Select Size
                   </span>
                   <span style={{ color: 'var(--text-muted)' }}>True to Indian Ethnic Sizing</span>
@@ -199,7 +236,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                         key={size}
                         type="button"
                         onClick={() => setSelectedSize(size)}
-                        className="px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer"
+                        className="btn-luxury px-3.5 py-2 text-xs font-semibold rounded-lg border cursor-pointer"
                         style={{
                           backgroundColor: active ? 'var(--primary)' : 'var(--input-bg)',
                           color: active ? 'var(--btn-text)' : 'var(--text-main)',
@@ -241,10 +278,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 type="button"
                 disabled={isOutOfStock}
                 onClick={() => {
-                  onAddToCart(product);
+                  onAddToCart(activeProduct);
                   onClose();
                 }}
-                className="flex-1 py-3.5 px-5 rounded-lg text-xs font-semibold uppercase tracking-widest flex items-center justify-center gap-2 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                className="btn-luxury flex-1 py-3.5 px-5 rounded-lg text-xs font-semibold uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                 style={{
                   backgroundColor: 'var(--primary)',
                   color: 'var(--btn-text)',
@@ -256,9 +293,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => onWishlistClick(product)}
-                aria-label={`Save ${product.name} to wishlist`}
-                className="px-4 py-3.5 rounded-lg border transition-colors flex items-center justify-center cursor-pointer"
+                onClick={() => onWishlistClick(activeProduct)}
+                aria-label={`Save ${activeProduct.name} to wishlist`}
+                className="btn-luxury px-4 py-3.5 rounded-lg border flex items-center justify-center cursor-pointer"
                 style={{
                   backgroundColor: 'var(--surface-elevated)',
                   borderColor: 'var(--border)',
@@ -272,11 +309,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             {cleanWhatsapp && (
               <a
                 href={`https://wa.me/${cleanWhatsapp}?text=${encodeURIComponent(
-                  `Hi ${storeSettings.storeName}, I have a question about "${product.name}" (Size: ${selectedSize}, ${formatINR(product.price)}).`
+                  `Hi ${storeSettings.storeName}, I have a question about "${activeProduct.name}" (Size: ${selectedSize}, ${formatINR(activeProduct.price)}).`
                 )}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full py-2.5 px-4 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                className="btn-luxury w-full py-2.5 px-4 rounded-lg border text-xs font-semibold flex items-center justify-center gap-2"
                 style={{
                   backgroundColor: 'var(--surface-elevated)',
                   borderColor: 'var(--border)',
@@ -288,7 +325,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               </a>
             )}
 
-            <div className="grid grid-cols-3 gap-2 pt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <div
+              className="grid grid-cols-3 gap-2 pt-1 text-[11px]"
+              style={{ color: 'var(--text-muted)' }}
+            >
               <div className="flex items-center gap-1.5">
                 <Truck className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
                 <span>Free delivery ₹1,999+</span>
@@ -308,4 +348,3 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     </div>
   );
 };
-

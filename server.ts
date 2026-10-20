@@ -336,7 +336,7 @@ app.get('/api/orders', requireAdminAuth, (req: Request, res: Response) => {
 app.post('/api/orders', (req: Request, res: Response) => {
   const { customer_details, items, payment_method, upi_ref_id, total } = req.body;
 
-  if (!customer_details || !items || !Array.isArray(items) || items.length === 0 || !payment_method) {
+  if (!customer_details || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Invalid order payload. Missing items or customer details.' });
   }
 
@@ -353,9 +353,9 @@ app.post('/api/orders', (req: Request, res: Response) => {
     id: orderId,
     customer_details,
     items,
-    payment_method,
+    payment_method: payment_method || 'Catalogue Order',
     upi_ref_id: upi_ref_id || undefined,
-    status: payment_method === 'UPI' ? 'Confirmed' : 'Confirmed',
+    status: 'Confirmed',
     total: Number(total),
     created_at: new Date().toISOString(),
   };

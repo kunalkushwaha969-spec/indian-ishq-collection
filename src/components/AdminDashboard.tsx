@@ -8,7 +8,9 @@ import {
   deleteProduct,
   updateOrderStatus,
   loginAdmin,
-  verifyAdminSession,
+  loginAdminWithGoogle,
+  signOutMerchant,
+  subscribeToMerchantAuth,
   setStoredToken,
   subscribeToFirestoreProducts,
   subscribeToFirestoreOrders,
@@ -27,7 +29,11 @@ import {
   getLocalStoreSettings,
   fetchStoreSettings,
   saveStoreSettings,
+  validateIndianWhatsAppNumber,
+  buildWhatsAppLink,
+  buildCustomerOrderWhatsAppMessage,
 } from '../services/settings';
+import { useAnimatedMount } from '../utils/useAnimatedMount';
 import {
   Lock,
   ShieldCheck,
@@ -35,6 +41,7 @@ import {
   ShoppingBag,
   TrendingUp,
   AlertTriangle,
+  AlertCircle,
   Plus,
   Minus,
   Trash2,
@@ -52,6 +59,8 @@ import {
   Palette,
   Settings,
   Search,
+  MessageCircle,
+  ExternalLink,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -73,8 +82,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
-  const [password, setPassword] = useState('ishq2026');
-  const [email, setEmail] = useState('admin@indianishq.com');
+  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Strictly 5 Main Sections: Dashboard, Products, Orders, Customize Store, Store Settings
@@ -113,6 +122,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [activities, setActivities] = useState<MerchantActivity[]>(() => getMerchantActivities());
   const [unreadCount, setUnreadCount] = useState<number>(() => getUnreadActivityCount());
 
+  // Animated mount hook must run unconditionally on every render
+  const { shouldRender, isEntered } = useAnimatedMount(isOpen, 240);
+
   useEffect(() => {
     const updateActivities = () => {
       setActivities(getMerchantActivities());
@@ -125,48 +137,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    let cancelled = false;
-
-    const checkAuth = async () => {
-      setIsCheckingAuth(true);
-
-      try {
-        const valid = await verifyAdminSession();
-        if (cancelled) return;
-
-        if (valid) {
-          setIsAuthenticated(true);
-          onAuthChange(true);
-          await loadData();
-        } else {
-          // Auto sign-in demo merchant session for frictionless preview verification
-          try {
-            await loginAdmin('ishq2026', 'admin@indianishq.com');
-            if (cancelled) return;
-            setIsAuthenticated(true);
-            onAuthChange(true);
-            await loadData();
-          } catch {
-            setIsAuthenticated(false);
-            onAuthChange(false);
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setIsAuthenticated(false);
-          onAuthChange(false);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsCheckingAuth(false);
-        }
+    setIsCheckingAuth(true);
+    const unsubAuth = subscribeToMerchantAuth(async (_user, isAdmin) => {
+      if (isAdmin) {
+        setIsAuthenticated(true);
+        onAuthChange(true);
+        await loadData();
+      } else {
+        setIsAuthenticated(false);
+        onAuthChange(false);
       }
-    };
-
-    checkAuth();
+      setIsCheckingAuth(false);
+    });
 
     return () => {
-      cancelled = true;
+      unsubAuth();
     };
   }, [isOpen]);
 
@@ -262,14 +247,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await loginAdmin(password, email);
       setIsAuthenticated(true);
       onAuthChange(true);
-      loadData();
+      await loadData();
     } catch (err: any) {
-      setLoginError(err.message || 'Invalid email or password. Please try again.');
+      setLoginError(err.message || 'Invalid administrator email or password.');
     }
   };
 
-  const handleLogout = () => {
+  const handleGoogleLogin = async () => {
+    setLoginError(null);
+    try {
+      await loginAdminWithGoogle();
+      setIsAuthenticated(true);
+      onAuthChange(true);
+      await loadData();
+    } catch (err: any) {
+      setLoginError(err.message || 'Google sign-in failed or account is not an authorized store administrator.');
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOutMerchant();
     setStoredToken(null);
+    setOrders([]);
     setIsAuthenticated(false);
     onAuthChange(false);
   };
@@ -319,12 +318,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setBanner(null), 2500);
   };
 
-  if (!isOpen) return null;
-
   const nonCancelledOrders = orders.filter((o) => o.status !== 'Cancelled');
   const completedOrders = orders.filter((o) => o.status === 'Delivered');
   const inProgressOrders = orders.filter(
     (o) =>
+      o.status === 'Pending' ||
+      o.status === 'Order Received' ||
       o.status === 'Pending UPI Payment' ||
       o.status === 'Confirmed' ||
       o.status === 'Packed' ||
@@ -339,6 +338,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (orderFilter === 'cancelled') return o.status === 'Cancelled';
     if (orderFilter === 'in_progress')
       return (
+        o.status === 'Pending' ||
+        o.status === 'Order Received' ||
         o.status === 'Pending UPI Payment' ||
         o.status === 'Confirmed' ||
         o.status === 'Packed' ||
@@ -356,6 +357,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       (p.fabric && p.fabric.toLowerCase().includes(q))
     );
   });
+
+  const merchantWaValidation = validateIndianWhatsAppNumber(storeSettings.whatsapp);
 
   const MAIN_SECTIONS: {
     id: MerchantSectionId;
@@ -398,16 +401,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     },
   ];
 
+  if (!shouldRender) return null;
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="admin-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-5 overflow-y-auto"
+      className={`fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-5 overflow-y-auto transition-opacity duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        isEntered ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
       style={{ backgroundColor: 'var(--overlay)' }}
     >
       <div
-        className="w-full max-w-5xl sm:rounded-xl shadow-2xl border-0 sm:border flex flex-col h-full sm:h-auto sm:max-h-[92vh] overflow-hidden transition-colors"
+        className={`w-full max-w-5xl sm:rounded-xl shadow-2xl border-0 sm:border flex flex-col h-full sm:h-auto sm:max-h-[92vh] overflow-hidden transition-all duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isEntered ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-2'
+        }`}
         style={{
           backgroundColor: 'var(--surface)',
           borderColor: 'var(--border)',
@@ -570,78 +579,101 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
 
-              <form onSubmit={handleLogin} className="space-y-4 text-left">
-                <div>
-                  <label
-                    htmlFor="merchant-login-email"
-                    className="block text-xs font-semibold mb-1"
-                    style={{ color: 'var(--text-main)' }}
-                  >
-                    Email Address
-                  </label>
-                  <input
-                    id="merchant-login-email"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full p-2.5 border rounded-lg text-xs"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
+              <div className="space-y-4 text-left">
+                <button
+                  type="button"
+                  onClick={handleGoogleLogin}
+                  className="w-full py-3 px-4 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow flex items-center justify-center gap-2 cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--primary)',
+                    color: 'var(--btn-text)',
+                  }}
+                >
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>Sign in with Google (Store Owner)</span>
+                </button>
+
+                <div className="relative flex items-center py-1">
+                  <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
+                  <span className="shrink-0 mx-3 text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                    Or Administrator Email
+                  </span>
+                  <div className="grow border-t" style={{ borderColor: 'var(--border)' }} />
                 </div>
 
-                <div>
-                  <label
-                    htmlFor="merchant-login-password"
-                    className="block text-xs font-semibold mb-1"
-                    style={{ color: 'var(--text-main)' }}
-                  >
-                    Password
-                  </label>
-                  <input
-                    id="merchant-login-password"
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full p-2.5 border rounded-lg text-xs"
+                <form onSubmit={handleLogin} className="space-y-3">
+                  <div>
+                    <label
+                      htmlFor="merchant-login-email"
+                      className="block text-xs font-semibold mb-1"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      Administrator Email
+                    </label>
+                    <input
+                      id="merchant-login-email"
+                      type="email"
+                      required
+                      placeholder="Enter authorized admin email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full p-2.5 border rounded-lg text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="merchant-login-password"
+                      className="block text-xs font-semibold mb-1"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      Password
+                    </label>
+                    <input
+                      id="merchant-login-password"
+                      type="password"
+                      required
+                      placeholder="Enter your Firebase Auth password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full p-2.5 border rounded-lg text-xs"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 text-xs font-semibold uppercase tracking-wider rounded-lg border transition-opacity hover:opacity-90 cursor-pointer"
                     style={{
-                      backgroundColor: 'var(--input-bg)',
+                      backgroundColor: 'var(--surface)',
                       borderColor: 'var(--border)',
                       color: 'var(--text-main)',
                     }}
-                  />
-                </div>
+                  >
+                    Sign In with Email
+                  </button>
+                </form>
 
                 <div
-                  className="p-3 rounded-lg text-[11px] border"
+                  className="p-3 rounded-lg text-[11px] border leading-relaxed"
                   style={{
                     backgroundColor: 'var(--surface)',
                     borderColor: 'var(--border)',
                     color: 'var(--text-secondary)',
                   }}
                 >
-                  Store Owner Password:{' '}
-                  <strong className="font-mono" style={{ color: 'var(--primary)' }}>
-                    ishq2026
-                  </strong>
+                  Protected by Firebase Authentication & Firestore Security Rules. Only verified store administrators can read customer orders, update order statuses, or edit store settings.
                 </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3 text-xs font-semibold uppercase tracking-wider rounded-lg transition-opacity hover:opacity-95 shadow cursor-pointer"
-                  style={{
-                    backgroundColor: 'var(--primary)',
-                    color: 'var(--btn-text)',
-                  }}
-                >
-                  Open Merchant Workspace
-                </button>
-              </form>
+              </div>
             </div>
           ) : (
             <div className="space-y-6">
@@ -681,7 +713,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* SECTION 1: DASHBOARD                                              */}
               {/* ================================================================= */}
               {activeTab === 'dashboard' && (
-                <div className="space-y-6">
+                <div key="dashboard" className="space-y-6 animate-fadeIn">
+                  {/* WhatsApp Configuration Status Card */}
+                  {!merchantWaValidation.isValid ? (
+                    <div
+                      className="p-4 sm:p-5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
+                      style={{
+                        backgroundColor: 'rgba(217, 119, 6, 0.08)',
+                        borderColor: 'rgba(217, 119, 6, 0.35)',
+                      }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className="p-2 rounded-lg shrink-0 mt-0.5"
+                          style={{ backgroundColor: 'rgba(217, 119, 6, 0.15)', color: '#d97706' }}
+                        >
+                          <AlertTriangle className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-main)' }}>
+                            Merchant WhatsApp Number Not Configured
+                          </h4>
+                          <p className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                            You have not set up your WhatsApp number yet. Please add your WhatsApp number in Store Settings so you can test your contact link and message customers with prefilled order details.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('settings')}
+                        className="px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-opacity hover:opacity-90 shadow-xs cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        Configure in Store Settings →
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      className="p-3.5 sm:p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 shadow-xs"
+                      style={{
+                        backgroundColor: 'var(--surface-elevated)',
+                        borderColor: 'var(--border)',
+                      }}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 shrink-0">
+                          <MessageCircle className="w-4 h-4" />
+                        </div>
+                        <div className="text-xs min-w-0">
+                          <span className="block" style={{ color: 'var(--text-muted)' }}>
+                            Active Merchant WhatsApp Contact:
+                          </span>
+                          <strong className="font-mono text-emerald-600 font-semibold text-sm">
+                            {merchantWaValidation.formattedDisplay}
+                          </strong>
+                        </div>
+                      </div>
+                      <a
+                        href={buildWhatsAppLink(
+                          merchantWaValidation.waId,
+                          `Namaste! This is a manual test message from ${storeSettings.storeName} to verify that the merchant WhatsApp contact (${merchantWaValidation.formattedDisplay}) is configured properly.`
+                        )}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 transition shadow-xs cursor-pointer"
+                        title="Manually test WhatsApp contact in browser or mobile app"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>Test WhatsApp Contact</span>
+                        <ExternalLink className="w-3 h-3 ml-0.5" />
+                      </a>
+                    </div>
+                  )}
+
                   {/* 4 Key Summary Cards */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
                     <div
@@ -962,12 +1069,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   color: 'var(--text-main)',
                                 }}
                               >
-                                <option value="Pending UPI Payment">Pending UPI Payment</option>
+                                <option value="Pending">Pending (Order Received)</option>
+                                {ord.status === 'Order Received' && (
+                                  <option value="Order Received">Order Received</option>
+                                )}
                                 <option value="Confirmed">Confirmed</option>
                                 <option value="Packed">Packed</option>
                                 <option value="Shipped">Shipped</option>
                                 <option value="Delivered">Delivered</option>
                                 <option value="Cancelled">Cancelled</option>
+                                {ord.status === 'Pending UPI Payment' && (
+                                  <option value="Pending UPI Payment">Pending UPI Payment</option>
+                                )}
                               </select>
                             </div>
                           </div>
@@ -1043,7 +1156,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* SECTION 2: PRODUCTS (Straightforward Add, Edit, Stock & Delete)    */}
               {/* ================================================================= */}
               {activeTab === 'products' && (
-                <div className="space-y-4">
+                <div key="products" className="space-y-4 animate-fadeIn">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <h3
@@ -1432,7 +1545,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* SECTION 3: ORDERS (Mobile Cards + Desktop Table)                  */}
               {/* ================================================================= */}
               {activeTab === 'orders' && (
-                <div className="space-y-4">
+                <div key="orders" className="space-y-4 animate-fadeIn">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <h3
@@ -1546,14 +1659,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <User className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--primary)' }} />
                                 <span>{ord.customer_details.name}</span>
                               </div>
-                              <a
-                                href={`tel:${ord.customer_details.phone}`}
-                                className="inline-flex items-center gap-1 mt-1 font-medium underline tabular-nums"
-                                style={{ color: 'var(--primary)' }}
-                              >
-                                <Phone className="w-3 h-3 shrink-0" />
-                                <span>{ord.customer_details.phone}</span>
-                              </a>
+                              <div className="flex flex-wrap items-center gap-2 mt-2">
+                                <a
+                                  href={`tel:${ord.customer_details.phone}`}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-medium tabular-nums cursor-pointer hover:opacity-85"
+                                  style={{
+                                    backgroundColor: 'var(--surface-elevated)',
+                                    borderColor: 'var(--border)',
+                                    color: 'var(--text-main)',
+                                  }}
+                                  title="Call customer"
+                                >
+                                  <Phone className="w-3 h-3 shrink-0" style={{ color: 'var(--primary)' }} />
+                                  <span>Call</span>
+                                </a>
+
+                                {merchantWaValidation.isValid ? (
+                                  <a
+                                    href={buildWhatsAppLink(
+                                      ord.customer_details.phone,
+                                      buildCustomerOrderWhatsAppMessage(
+                                        ord,
+                                        storeSettings.storeName,
+                                        merchantWaValidation.formattedDisplay
+                                      )
+                                    )}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-medium cursor-pointer hover:opacity-85"
+                                    style={{
+                                      backgroundColor: 'var(--surface-elevated)',
+                                      borderColor: 'var(--border)',
+                                      color: 'var(--success-text)',
+                                    }}
+                                    title={`Contact customer on WhatsApp with prefilled order details (From ${merchantWaValidation.formattedDisplay})`}
+                                  >
+                                    <MessageCircle className="w-3 h-3 shrink-0" />
+                                    <span>WhatsApp Customer</span>
+                                  </a>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveTab('settings');
+                                      setBanner({
+                                        type: 'info',
+                                        message: 'Please add your WhatsApp number in Store Settings so you can contact customers with order details.',
+                                      });
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-medium cursor-pointer hover:opacity-85"
+                                    style={{
+                                      backgroundColor: 'rgba(217, 119, 6, 0.08)',
+                                      borderColor: 'rgba(217, 119, 6, 0.3)',
+                                      color: '#b45309',
+                                    }}
+                                    title="Add your merchant WhatsApp number in Store Settings"
+                                  >
+                                    <MessageCircle className="w-3 h-3 shrink-0" />
+                                    <span>Add WhatsApp in Settings</span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
 
                             <div>
@@ -1612,12 +1778,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 color: 'var(--text-main)',
                               }}
                             >
-                              <option value="Pending UPI Payment">Pending UPI Payment</option>
+                              <option value="Pending">Pending (Order Received)</option>
+                              {ord.status === 'Order Received' && (
+                                <option value="Order Received">Order Received</option>
+                              )}
                               <option value="Confirmed">Confirmed</option>
                               <option value="Packed">Packed</option>
                               <option value="Shipped">Shipped</option>
                               <option value="Delivered">Delivered</option>
                               <option value="Cancelled">Cancelled</option>
+                              {ord.status === 'Pending UPI Payment' && (
+                                <option value="Pending UPI Payment">Pending UPI Payment (Legacy)</option>
+                              )}
                             </select>
                           </div>
                         </div>
@@ -1631,30 +1803,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* SECTION 4: CUSTOMIZE STORE (Homepage, Colors & Store Information) */}
               {/* ================================================================= */}
               {activeTab === 'customize' && (
-                <StoreCustomization
-                  storeSettings={storeSettings}
-                  isSaving={isSavingSettings}
-                  onChangeSettings={setStoreSettings}
-                  onSaveSettings={handleSaveSettings}
-                  onCancelChanges={handleCancelSettingsChanges}
-                  onSelectPresetTheme={(themeId, mode) =>
-                    onThemePreviewChange?.(
-                      themeId,
-                      mode || storeSettings.defaultAppearance || 'light'
-                    )
-                  }
-                  onBanner={(b) => {
-                    setBanner(b);
-                    setTimeout(() => setBanner(null), 4000);
-                  }}
-                />
+                <div key="customize" className="animate-fadeIn">
+                  <StoreCustomization
+                    storeSettings={storeSettings}
+                    isSaving={isSavingSettings}
+                    onChangeSettings={setStoreSettings}
+                    onSaveSettings={handleSaveSettings}
+                    onCancelChanges={handleCancelSettingsChanges}
+                    onSelectPresetTheme={(themeId, mode) =>
+                      onThemePreviewChange?.(
+                        themeId,
+                        mode || storeSettings.defaultAppearance || 'light'
+                      )
+                    }
+                    onBanner={(b) => {
+                      setBanner(b);
+                      setTimeout(() => setBanner(null), 4000);
+                    }}
+                  />
+                </div>
               )}
 
               {/* ================================================================= */}
               {/* SECTION 5: STORE SETTINGS (Delivery Charges, Payments & Hours)    */}
               {/* ================================================================= */}
               {activeTab === 'settings' && (
-                <form onSubmit={(e) => handleSaveSettings(e)} className="space-y-6">
+                <form key="settings" onSubmit={(e) => handleSaveSettings(e)} className="space-y-6 animate-fadeIn">
                   <div
                     className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b"
                     style={{ borderColor: 'var(--border)' }}
@@ -1842,7 +2016,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* 3. Payment Methods */}
+                  {/* 3. Merchant WhatsApp Number & Store Contact */}
                   <div
                     className="p-4 sm:p-5 rounded-xl border space-y-4"
                     style={{
@@ -1851,157 +2025,186 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }}
                   >
                     <div>
-                      <h4
-                        className="font-serif text-lg font-semibold"
-                        style={{ color: 'var(--text-main)' }}
-                      >
-                        3. Customer Payment Options
-                      </h4>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                        Choose how customers can pay at checkout.
+                      <div className="flex items-center justify-between gap-2">
+                        <h4
+                          className="font-serif text-lg font-semibold flex items-center gap-2"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          <MessageCircle className="w-5 h-5 text-emerald-600" />
+                          <span>3. Merchant WhatsApp & Phone Number</span>
+                        </h4>
+                        {merchantWaValidation.isValid ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold text-emerald-700 bg-emerald-500/10 border border-emerald-500/30">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Configured</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold text-amber-700 bg-amber-500/10 border border-amber-500/30">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>Not Configured</span>
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                        Configure your official merchant WhatsApp number for manual verification, customer inquiries, and one-click order follow-ups. Saved to Firebase Firestore.
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <label
-                        className="p-3.5 rounded-lg border flex items-start gap-3 cursor-pointer"
-                        style={{
-                          backgroundColor: 'var(--surface)',
-                          borderColor: storeSettings.codEnabled ? 'var(--primary)' : 'var(--border)',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={storeSettings.codEnabled}
-                          onChange={(e) =>
-                            setStoreSettings({ ...storeSettings, codEnabled: e.target.checked })
-                          }
-                          className="mt-0.5 accent-current"
-                        />
-                        <div>
-                          <span
-                            className="block text-xs font-semibold"
-                            style={{ color: 'var(--text-main)' }}
-                          >
-                            Cash on Delivery (COD)
-                          </span>
-                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            Customer pays cash when delivered
-                          </span>
-                        </div>
-                      </label>
-
-                      <label
-                        className="p-3.5 rounded-lg border flex items-start gap-3 cursor-pointer"
-                        style={{
-                          backgroundColor: 'var(--surface)',
-                          borderColor: storeSettings.upiEnabled ? 'var(--primary)' : 'var(--border)',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={storeSettings.upiEnabled}
-                          onChange={(e) =>
-                            setStoreSettings({ ...storeSettings, upiEnabled: e.target.checked })
-                          }
-                          className="mt-0.5 accent-current"
-                        />
-                        <div>
-                          <span
-                            className="block text-xs font-semibold"
-                            style={{ color: 'var(--text-main)' }}
-                          >
-                            UPI QR Payment
-                          </span>
-                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            GPay, PhonePe, Paytm QR code
-                          </span>
-                        </div>
-                      </label>
-
-                      <label
-                        className="p-3.5 rounded-lg border flex items-start gap-3 cursor-pointer"
-                        style={{
-                          backgroundColor: 'var(--surface)',
-                          borderColor: storeSettings.razorpayEnabled
-                            ? 'var(--primary)'
-                            : 'var(--border)',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={storeSettings.razorpayEnabled}
-                          onChange={(e) =>
-                            setStoreSettings({
-                              ...storeSettings,
-                              razorpayEnabled: e.target.checked,
-                            })
-                          }
-                          className="mt-0.5 accent-current"
-                        />
-                        <div>
-                          <span
-                            className="block text-xs font-semibold"
-                            style={{ color: 'var(--text-main)' }}
-                          >
-                            Razorpay Online
-                          </span>
-                          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            Cards, Netbanking & UPI
-                          </span>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* WhatsApp Number with +91 Country Code & Validation */}
+                      <div className="space-y-1.5">
                         <label
-                          htmlFor="setting-upi-vpa"
-                          className="block text-xs font-semibold mb-1"
+                          htmlFor="setting-whatsapp"
+                          className="block text-xs font-semibold"
                           style={{ color: 'var(--text-main)' }}
                         >
-                          Your Store UPI ID (for receiving UPI payments)
+                          Merchant WhatsApp Number
                         </label>
-                        <input
-                          id="setting-upi-vpa"
-                          type="text"
-                          value={storeSettings.upiVpa}
-                          onChange={(e) =>
-                            setStoreSettings({ ...storeSettings, upiVpa: e.target.value })
-                          }
-                          placeholder="Example: indianishq@okaxis"
-                          className="w-full p-2.5 border rounded-lg text-xs font-mono"
-                          style={{
-                            backgroundColor: 'var(--input-bg)',
-                            borderColor: 'var(--border)',
-                            color: 'var(--text-main)',
-                          }}
-                        />
+                        <div className="flex rounded-lg border overflow-hidden focus-within:ring-2 focus-within:ring-primary/40" style={{ borderColor: 'var(--border)' }}>
+                          <span
+                            className="px-3 py-2.5 text-xs font-semibold border-r flex items-center gap-1 select-none shrink-0"
+                            style={{
+                              backgroundColor: 'var(--surface)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            🇮🇳 +91
+                          </span>
+                          <input
+                            id="setting-whatsapp"
+                            type="text"
+                            inputMode="tel"
+                            value={storeSettings.whatsapp}
+                            onChange={(e) =>
+                              setStoreSettings({ ...storeSettings, whatsapp: e.target.value })
+                            }
+                            placeholder="e.g. 98765 43210"
+                            className="w-full p-2.5 text-xs font-mono tabular-nums bg-transparent focus:outline-none"
+                            style={{
+                              backgroundColor: 'var(--input-bg)',
+                              color: 'var(--text-main)',
+                            }}
+                          />
+                        </div>
+
+                        {/* Live Validation Guidance */}
+                        {storeSettings.whatsapp.trim().length === 0 ? (
+                          <p className="text-[11px] text-amber-600 font-medium flex items-center gap-1">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            <span>No WhatsApp number configured yet. Enter your 10-digit mobile number above.</span>
+                          </p>
+                        ) : merchantWaValidation.isValid ? (
+                          <p className="text-[11px] text-emerald-600 font-medium flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>Valid Indian mobile number ({merchantWaValidation.formattedDisplay}).</span>
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{merchantWaValidation.error || 'Please enter a valid 10-digit Indian mobile number.'}</span>
+                          </p>
+                        )}
+                        <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          Accepts 10 digits with or without spaces/dashes. Automatically prefixes India (+91) country code.
+                        </p>
                       </div>
 
-                      <div>
+                      {/* Store Phone Number */}
+                      <div className="space-y-1.5">
                         <label
-                          htmlFor="setting-razorpay-key"
-                          className="block text-xs font-semibold mb-1"
+                          htmlFor="setting-store-phone"
+                          className="block text-xs font-semibold"
                           style={{ color: 'var(--text-main)' }}
                         >
-                          Razorpay Key ID (Optional)
+                          Merchant Store Voice Phone
                         </label>
                         <input
-                          id="setting-razorpay-key"
+                          id="setting-store-phone"
                           type="text"
-                          value={storeSettings.razorpayKeyId}
+                          inputMode="tel"
+                          value={storeSettings.phone}
                           onChange={(e) =>
-                            setStoreSettings({ ...storeSettings, razorpayKeyId: e.target.value })
+                            setStoreSettings({ ...storeSettings, phone: e.target.value })
                           }
-                          placeholder="Leave blank if not using Razorpay"
-                          className="w-full p-2.5 border rounded-lg text-xs font-mono"
+                          placeholder="e.g. +91 98765 43210"
+                          className="w-full p-2.5 border rounded-lg text-xs tabular-nums"
                           style={{
                             backgroundColor: 'var(--input-bg)',
                             borderColor: 'var(--border)',
                             color: 'var(--text-main)',
                           }}
                         />
+                        <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          Displayed in the website footer for regular phone calls.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Test WhatsApp Contact Button & Manual Verification Card */}
+                    <div
+                      className="p-3.5 sm:p-4 rounded-xl border space-y-2.5"
+                      style={{
+                        backgroundColor: 'var(--surface)',
+                        borderColor: 'var(--border)',
+                      }}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div>
+                          <h5 className="text-xs font-semibold" style={{ color: 'var(--text-main)' }}>
+                            Manual WhatsApp Contact Verification
+                          </h5>
+                          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            {merchantWaValidation.isValid
+                              ? `Ready to test contact with ${merchantWaValidation.formattedDisplay}`
+                              : 'Enter a valid 10-digit WhatsApp number above to enable manual testing'}
+                          </p>
+                        </div>
+
+                        {merchantWaValidation.isValid ? (
+                          <a
+                            href={buildWhatsAppLink(
+                              merchantWaValidation.waId,
+                              `Namaste! This is a manual test message from ${storeSettings.storeName} to verify that the merchant WhatsApp contact (${merchantWaValidation.formattedDisplay}) is configured properly.`
+                            )}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 transition shadow-xs cursor-pointer shrink-0"
+                            title="Open WhatsApp chat with configured number"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>Test WhatsApp Contact</span>
+                            <ExternalLink className="w-3 h-3 ml-0.5" />
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium border opacity-50 cursor-not-allowed shrink-0"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-muted)',
+                            }}
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>Test WhatsApp Contact</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div
+                        className="p-2.5 rounded-lg border text-[11px] leading-relaxed flex items-start gap-2"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Manual Test Notice:</strong> This button opens WhatsApp in your browser or phone with a pre-filled test message so you can manually verify that your number opens and receives messages properly. This is a manual test, <em>not</em> an automatic background message, and does not incur any paid WhatsApp API fees.
+                        </span>
                       </div>
                     </div>
                   </div>

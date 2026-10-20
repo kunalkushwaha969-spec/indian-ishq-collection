@@ -1,8 +1,20 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  type Auth,
+  type User,
+} from 'firebase/auth';
+import {
   getFirestore,
   collection,
   doc,
+  getDoc,
+  getDocFromServer,
   getDocs,
   setDoc,
   updateDoc,
@@ -17,16 +29,161 @@ import type { Product, Order } from '../utils/ecommerce';
 import { initialProducts, resolveSafeProductImage } from '../utils/ecommerce';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Safely initialize Firestore instance with fallback
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+// Safely initialize Firebase App, Auth, and Firestore
 let dbInstance: Firestore | null = null;
+let authInstance: Auth | null = null;
+const googleProvider = new GoogleAuthProvider();
+
 try {
   const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
   dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  authInstance = getAuth(app);
 } catch (err) {
   console.warn('Firebase initialization notice:', err);
 }
 
 export const db = dbInstance;
+export const auth = authInstance;
+
+export const AUTHORIZED_MERCHANT_EMAIL = 'kunalkushwaha969@gmail.com';
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+      emailVerified: auth?.currentUser?.emailVerified,
+      isAnonymous: auth?.currentUser?.isAnonymous,
+      tenantId: auth?.currentUser?.tenantId,
+      providerInfo:
+        auth?.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+async function testConnection() {
+  if (!db) return;
+  try {
+    await getDocFromServer(doc(db, 'settings', 'store'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+if (typeof window !== 'undefined') {
+  testConnection();
+}
+
+export async function isAuthorizedMerchantUser(user: User | null): Promise<boolean> {
+  if (!user) return false;
+  if (
+    user.email &&
+    user.email.toLowerCase() === AUTHORIZED_MERCHANT_EMAIL.toLowerCase() &&
+    user.emailVerified
+  ) {
+    return true;
+  }
+  if (db) {
+    try {
+      const adminSnap = await getDoc(doc(db, 'admins', user.uid));
+      if (adminSnap.exists()) return true;
+    } catch {
+      // Non-admin user cannot read or does not have an admin doc
+    }
+  }
+  return false;
+}
+
+export async function signInMerchantWithGoogle(): Promise<User> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not initialized.');
+  }
+  const cred = await signInWithPopup(auth, googleProvider);
+  const authorized = await isAuthorizedMerchantUser(cred.user);
+  if (!authorized) {
+    await signOut(auth);
+    throw new Error(
+      `Access denied: ${cred.user.email || 'This account'} is not authorized as a store administrator.`
+    );
+  }
+  return cred.user;
+}
+
+export async function signInMerchantWithEmail(email: string, password: string): Promise<User> {
+  if (!auth) {
+    throw new Error('Firebase Authentication is not initialized.');
+  }
+  const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+  const authorized = await isAuthorizedMerchantUser(cred.user);
+  if (!authorized) {
+    await signOut(auth);
+    throw new Error(
+      `Access denied: ${cred.user.email || 'This account'} is not authorized as a store administrator.`
+    );
+  }
+  return cred.user;
+}
+
+export async function signOutMerchant(): Promise<void> {
+  if (!auth) return;
+  await signOut(auth);
+}
+
+export function subscribeToMerchantAuth(
+  callback: (user: User | null, isAdmin: boolean) => void
+): () => void {
+  if (!auth) {
+    callback(null, false);
+    return () => {};
+  }
+  return onAuthStateChanged(auth, async (user) => {
+    if (!user) {
+      callback(null, false);
+      return;
+    }
+    const authorized = await isAuthorizedMerchantUser(user);
+    callback(user, authorized);
+  });
+}
 
 const PRODUCTS_COLLECTION = 'products';
 const ORDERS_COLLECTION = 'orders';
@@ -43,7 +200,8 @@ export async function seedFirestoreIfEmpty(): Promise<Product[]> {
       return items;
     }
 
-    if (isSeeding) return [...initialProducts];
+    // Only attempt to seed Firestore if signed in as an admin
+    if (!auth?.currentUser || isSeeding) return [...initialProducts];
     isSeeding = true;
 
     const existingMap = new Map<string, Product>();
@@ -77,7 +235,7 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
       list.push({ ...data, image_url: resolveSafeProductImage(data) });
     });
     return list;
-  } catch (err) {
+  } catch {
     try {
       if (!db) return [...initialProducts];
       const snap = await getDocs(collection(db, PRODUCTS_COLLECTION));
@@ -97,77 +255,90 @@ export async function fetchFirestoreProducts(): Promise<Product[]> {
 }
 
 export async function saveFirestoreProduct(product: Product): Promise<Product> {
-  if (!db) return product;
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
+  const path = `${PRODUCTS_COLLECTION}/${product.id}`;
   try {
     const docRef = doc(db, PRODUCTS_COLLECTION, product.id);
     await setDoc(docRef, product, { merge: true });
     return product;
   } catch (err) {
-    console.warn('Firestore save product warning:', err);
-    return product;
+    handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
 
 export async function updateFirestoreProductStock(id: string, stock: number): Promise<void> {
-  if (!db) return;
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
+  const path = `${PRODUCTS_COLLECTION}/${id}`;
   try {
     const docRef = doc(db, PRODUCTS_COLLECTION, id);
     await updateDoc(docRef, { stock: Math.max(0, stock) });
   } catch (err) {
-    console.warn('Firestore stock update warning:', err);
+    handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
 
 export async function deleteFirestoreProduct(id: string): Promise<void> {
-  if (!db) return;
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
+  const path = `${PRODUCTS_COLLECTION}/${id}`;
   try {
     const docRef = doc(db, PRODUCTS_COLLECTION, id);
     await deleteDoc(docRef);
   } catch (err) {
-    console.warn('Firestore delete product warning:', err);
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 
 export async function fetchFirestoreOrders(): Promise<Order[]> {
-  if (!db) return [];
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
   try {
     const q = query(collection(db, ORDERS_COLLECTION), orderBy('created_at', 'desc'));
     const snap = await getDocs(q);
     const list: Order[] = [];
     snap.forEach((d) => list.push(d.data() as Order));
     return list;
-  } catch {
-    try {
-      if (!db) return [];
-      const snap = await getDocs(collection(db, ORDERS_COLLECTION));
-      const list: Order[] = [];
-      snap.forEach((d) => list.push(d.data() as Order));
-      return list;
-    } catch {
-      return [];
-    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, ORDERS_COLLECTION);
   }
 }
 
 export async function saveFirestoreOrder(order: Order): Promise<Order> {
-  if (!db) return order;
+  if (!db) {
+    throw new Error('Firestore database is not initialized. Order could not be saved.');
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error('You appear to be offline. Order could not be saved to the store database.');
+  }
+  const path = `${ORDERS_COLLECTION}/${order.id}`;
   try {
     const docRef = doc(db, ORDERS_COLLECTION, order.id);
     await setDoc(docRef, order);
     return order;
   } catch (err) {
-    console.warn('Firestore save order warning:', err);
-    return order;
+    handleFirestoreError(err, OperationType.CREATE, path);
   }
 }
 
-export async function updateFirestoreOrderStatus(orderId: string, status: Order['status']): Promise<void> {
-  if (!db) return;
+export async function updateFirestoreOrderStatus(
+  orderId: string,
+  status: Order['status']
+): Promise<void> {
+  if (!db) {
+    throw new Error('Firestore database is not initialized.');
+  }
+  const path = `${ORDERS_COLLECTION}/${orderId}`;
   try {
     const docRef = doc(db, ORDERS_COLLECTION, orderId);
     await updateDoc(docRef, { status });
   } catch (err) {
-    console.warn('Firestore update order status warning:', err);
+    handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
 
@@ -190,7 +361,7 @@ export function subscribeToFirestoreProducts(callback: (products: Product[]) => 
         callback(items);
       },
       (error) => {
-        console.warn('Real-time sync snapshot notice:', error);
+        console.warn('Real-time product snapshot notice:', error);
       }
     );
   } catch (err) {
@@ -201,17 +372,22 @@ export function subscribeToFirestoreProducts(callback: (products: Product[]) => 
 
 export function subscribeToFirestoreOrders(callback: (orders: Order[]) => void): () => void {
   try {
-    if (!db) return () => {};
+    if (!db || !auth?.currentUser) return () => {};
     const colRef = collection(db, ORDERS_COLLECTION);
     return onSnapshot(
       colRef,
       (snap) => {
         const items: Order[] = [];
         snap.forEach((d) => items.push(d.data() as Order));
+        items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         callback(items);
       },
       (error) => {
-        console.warn('Real-time order snapshot notice:', error);
+        try {
+          handleFirestoreError(error, OperationType.LIST, ORDERS_COLLECTION);
+        } catch {
+          // Logged via handleFirestoreError
+        }
       }
     );
   } catch (err) {

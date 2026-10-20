@@ -228,57 +228,41 @@ export const Footer: React.FC<FooterProps> = ({
                   onClick={() => setActiveInfoModal('privacy')}
                   className="hover:underline transition cursor-pointer text-left"
                 >
-                  Privacy & Payment Security
+                  Privacy & Order Policies
                 </button>
               </li>
             </ul>
           )}
 
-          {/* Available Payment Methods Summary */}
+          {/* Order Placement Model */}
           <div className="pt-2">
             <span
               className="block text-[10px] font-semibold uppercase tracking-wider mb-1.5"
               style={{ color: 'var(--text-muted)' }}
             >
-              Accepted Payment Methods
+              Order Placement Model
             </span>
             <div className="flex flex-wrap gap-1.5">
-              {storeSettings.upiEnabled && (
-                <span
-                  className="px-2 py-0.5 rounded border text-[10px] font-semibold"
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                >
-                  UPI QR
-                </span>
-              )}
-              {storeSettings.codEnabled && (
-                <span
-                  className="px-2 py-0.5 rounded border text-[10px] font-semibold"
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                >
-                  Cash on Delivery
-                </span>
-              )}
-              {razorpayReady && (
-                <span
-                  className="px-2 py-0.5 rounded border text-[10px] font-semibold"
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                    color: 'var(--text-main)',
-                  }}
-                >
-                  Cards / NetBanking
-                </span>
-              )}
+              <span
+                className="px-2 py-0.5 rounded border text-[10px] font-semibold"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-main)',
+                }}
+              >
+                Direct Catalogue Order
+              </span>
+              <span
+                className="px-2 py-0.5 rounded border text-[10px] font-semibold"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                No Online Payment Required
+              </span>
             </div>
           </div>
         </div>
@@ -414,7 +398,7 @@ export const Footer: React.FC<FooterProps> = ({
               <h4 className="font-serif text-xl font-bold" style={{ color: 'var(--primary)' }}>
                 {activeInfoModal === 'shipping' && 'Shipping & Delivery Policy'}
                 {activeInfoModal === 'returns' && 'Returns & Exchange Policy'}
-                {activeInfoModal === 'privacy' && 'Privacy & Payment Security'}
+                {activeInfoModal === 'privacy' && 'Privacy & Order Policies'}
               </h4>
               <button
                 type="button"
@@ -443,12 +427,10 @@ export const Footer: React.FC<FooterProps> = ({
               {activeInfoModal === 'privacy' && (
                 <>
                   <p>
-                    • <strong>Secure Payments:</strong> Choose between Dynamic UPI QR,{' '}
-                    {razorpayReady ? 'Razorpay Online Checkout, ' : ''}or Cash on Delivery.
+                    • <strong>Direct Catalogue Ordering:</strong> Indian Ishq Collection operates as a product catalogue and order placement service. No online payment details, credit cards, or payment gateways are requested on this site.
                   </p>
                   <p>
-                    • <strong>Data Privacy:</strong> Customer contact numbers and delivery addresses
-                    are used strictly for order fulfillment and courier tracking updates.
+                    • <strong>Customer Privacy:</strong> Customer contact numbers and delivery addresses are securely recorded in our store system and used strictly for order fulfillment and courier delivery coordination.
                   </p>
                 </>
               )}

@@ -1,40 +1,73 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
+    function isAdmin() {
+      return request.auth != null && (
+        (request.auth.token.email == 'kunalkushwaha969@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
     function isValidProduct(data) {
       return data.name is string && data.name.size() > 0 && data.name.size() <= 200
         && data.price is number && data.price >= 0
         && data.stock is number && data.stock >= 0;
     }
 
-    function isValidOrder(data) {
-      return data.customer_details != null
-        && data.items is list
-        && data.total is number && data.total >= 0;
+    function isValidNewOrder(data) {
+      return data.customer_details is map
+        && data.customer_details.name is string && data.customer_details.name.size() >= 2
+        && data.customer_details.phone is string && data.customer_details.phone.size() >= 10
+        && data.customer_details.address is string && data.customer_details.address.size() >= 5
+        && data.items is list && data.items.size() > 0
+        && data.total is number && data.total >= 0
+        && data.status in ['Pending', 'Order Received', 'Pending UPI Payment'];
+    }
+
+    function isValidOrderStatus(data) {
+      return data.status in [
+        'Pending',
+        'Order Received',
+        'Pending UPI Payment',
+        'Confirmed',
+        'Packed',
+        'Shipped',
+        'Delivered',
+        'Cancelled'
+      ];
+    }
+
+    // Admins lookup collection
+    match /admins/{adminUid} {
+      allow get: if request.auth != null && request.auth.uid == adminUid;
+      allow list, write: if false;
     }
 
     // Products collection:
-    // Live catalog and inventory: browsable by all visitors and editable by store managers
+    // Publicly browsable by customers; only authenticated store administrators can create, update, or delete
     match /products/{productId} {
       allow read: if true;
-      allow create, update: if isValidProduct(request.resource.data);
-      allow delete: if true;
+      allow create, update: if isAdmin() && isValidProduct(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Orders collection:
-    // Placed by customers upon checkout and reviewed by merchant in workspace
+    // Customers can submit new orders (initial status Pending / Order Received);
+    // Only authenticated store administrators can read orders or update order status
     match /orders/{orderId} {
-      allow read: if true;
-      allow create: if isValidOrder(request.resource.data);
-      allow update, delete: if true;
+      allow read: if isAdmin();
+      allow create: if isValidNewOrder(request.resource.data);
+      allow update: if isAdmin() && isValidOrderStatus(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Store Settings collection:
-    // Brand identity, contact details, business hours, social links, policies, UPI VPA, and payment methods
+    // Publicly readable for storefront rendering; only authenticated store administrators can update
     match /settings/{settingId} {
       allow read: if true;
-      allow create, update: if request.resource.data.storeName is string
+      allow create, update: if isAdmin()
+        && request.resource.data.storeName is string
         && request.resource.data.storeName.size() > 0
         && request.resource.data.phone is string
         && request.resource.data.phone.size() > 0
@@ -44,3 +77,4 @@ service cloud.firestore {
     }
   }
 }
+

@@ -439,7 +439,7 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
       {/* AREA A: HOMEPAGE (Hero Cover Images, Headings, Slideshow Mode & CTA)  */}
       {/* ===================================================================== */}
       {activeArea === 'homepage' && (
-        <div className="space-y-6">
+        <div key="homepage" className="space-y-6 animate-fadeIn">
           {/* 1. Live Homepage Banner Preview */}
           <div
             className="p-4 sm:p-5 rounded-xl border space-y-3"
@@ -1147,7 +1147,7 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
       {/* AREA B: COLORS & APPEARANCE (6 Preset Themes + Light/Dark + Preview)  */}
       {/* ===================================================================== */}
       {activeArea === 'appearance' && (
-        <div className="space-y-6">
+        <div key="appearance" className="space-y-6 animate-fadeIn">
           {/* 1. Six Preset Ethnic Boutique Themes */}
           <div
             className="p-4 sm:p-5 rounded-xl border space-y-4"
@@ -1436,7 +1436,7 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
       {/* AREA C: STORE INFORMATION (Simple Forms with Clear Labels & Examples) */}
       {/* ===================================================================== */}
       {activeArea === 'info' && (
-        <div className="space-y-5">
+        <div key="info" className="space-y-5 animate-fadeIn">
           {/* 1. Store Name, Tagline & Logo */}
           <div
             className="p-4 sm:p-5 rounded-xl border space-y-4"
@@ -1620,14 +1620,14 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
                   className="block text-xs font-semibold mb-1"
                   style={{ color: 'var(--text-main)' }}
                 >
-                  WhatsApp Number (with 91 country code)
+                  Merchant WhatsApp Number
                 </label>
                 <input
                   id="cust-whatsapp"
                   type="text"
                   value={storeSettings.whatsapp}
                   onChange={(e) => updateField('whatsapp', e.target.value)}
-                  placeholder="Example: 919876543210"
+                  placeholder="e.g. 98765 43210 (or +91)"
                   className="w-full p-2.5 rounded-lg border text-xs tabular-nums"
                   style={{
                     backgroundColor: 'var(--input-bg)',
@@ -1635,6 +1635,9 @@ export const StoreCustomization: React.FC<StoreCustomizationProps> = ({
                     color: 'var(--text-main)',
                   }}
                 />
+                <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Default India (+91) country code. Saved in Firebase store settings.
+                </p>
               </div>
 
               <div className="sm:col-span-2">

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShoppingBag, CheckCircle2, Sparkles, X, AlertTriangle } from 'lucide-react';
+import { useAnimatedMount } from '../utils/useAnimatedMount';
 
 export interface ToastData {
   id?: string;
@@ -16,20 +17,33 @@ interface ToastProps {
 }
 
 export const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
-  if (!toast) return null;
+  const [renderedToast, setRenderedToast] = useState<ToastData | null>(toast);
+  const { shouldRender, isEntered } = useAnimatedMount(Boolean(toast), 240);
 
-  const isCart = toast.type === 'cart';
-  const isOrder = toast.type === 'order' || toast.type === 'success';
-  const isError = toast.type === 'error';
+  useEffect(() => {
+    if (toast) {
+      setRenderedToast(toast);
+    }
+  }, [toast]);
+
+  if (!shouldRender || !renderedToast) return null;
+
+  const isCart = renderedToast.type === 'cart';
+  const isOrder = renderedToast.type === 'order' || renderedToast.type === 'success';
+  const isError = renderedToast.type === 'error';
 
   return (
     <aside
       aria-label="Notification"
       aria-live="polite"
-      className="fixed bottom-20 sm:bottom-6 left-4 sm:left-6 z-[10001] max-w-sm w-[calc(100vw-2rem)] sm:w-full transition-all duration-200"
+      className={`fixed bottom-20 sm:bottom-6 left-4 sm:left-6 z-[10001] max-w-sm w-[calc(100vw-2rem)] sm:w-full transition-all duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        isEntered
+          ? 'opacity-100 translate-y-0 scale-100'
+          : 'opacity-0 translate-y-3 scale-[0.98] pointer-events-none'
+      }`}
     >
       <div
-        className="p-4 rounded-xl shadow-2xl border backdrop-blur-md flex items-start gap-3 transition-colors"
+        className="p-4 rounded-xl shadow-2xl border backdrop-blur-md flex items-start gap-3 transition-colors duration-200"
         style={{
           backgroundColor: isError
             ? 'var(--error-bg)'
@@ -84,26 +98,26 @@ export const Toast: React.FC<ToastProps> = ({ toast, onClose }) => {
         </div>
 
         <div className="flex-1 min-w-0 pr-1">
-          {toast.title && (
+          {renderedToast.title && (
             <h4 className="font-serif text-sm font-semibold tracking-wide mb-0.5">
-              {toast.title}
+              {renderedToast.title}
             </h4>
           )}
           <p className="text-xs leading-relaxed font-sans opacity-90">
-            {toast.message}
+            {renderedToast.message}
           </p>
 
-          {toast.actionLabel && toast.onAction && (
+          {renderedToast.actionLabel && renderedToast.onAction && (
             <button
               type="button"
               onClick={() => {
-                toast.onAction?.();
+                renderedToast.onAction?.();
                 onClose();
               }}
-              className="mt-2 text-xs font-semibold underline underline-offset-2 flex items-center gap-1 cursor-pointer"
+              className="mt-2 text-xs font-semibold underline underline-offset-2 flex items-center gap-1 cursor-pointer transition-opacity hover:opacity-80"
               style={{ color: 'var(--primary)' }}
             >
-              <span>{toast.actionLabel}</span>
+              <span>{renderedToast.actionLabel}</span>
               <span>→</span>
             </button>
           )}

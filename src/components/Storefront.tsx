@@ -40,7 +40,62 @@ import {
   Star,
   Quote,
   Mail,
+  Menu,
 } from 'lucide-react';
+
+const RevealSection: React.FC<{
+  sectionId: string;
+  className?: string;
+  children: React.ReactNode;
+}> = ({ sectionId, className = '', children }) => {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReduced || !('IntersectionObserver' in window)) {
+      setIsVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setIsVisible(true);
+            observer.disconnect();
+          }
+        });
+      },
+      { threshold: 0.08, rootMargin: '0px 0px -24px 0px' }
+    );
+
+    if (ref.current) {
+      observer.observe(ref.current);
+    }
+
+    // Safety fallback so content is guaranteed to appear even if observer is throttled
+    const fallbackTimer = window.setTimeout(() => {
+      setIsVisible(true);
+    }, 1200);
+
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(fallbackTimer);
+    };
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      className={`reveal-section ${isVisible ? 'reveal-visible' : 'reveal-pending'} ${className}`}
+    >
+      {children}
+    </div>
+  );
+};
+
 
 type SortOption = 'featured' | 'price-asc' | 'price-desc';
 
@@ -243,6 +298,37 @@ export const Storefront: React.FC<StorefrontProps> = ({
   const [inStockOnly, setInStockOnly] = useState<boolean>(false);
   const [maxPriceFilter, setMaxPriceFilter] = useState<number>(25000);
   const [showFiltersPanel, setShowFiltersPanel] = useState<boolean>(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const [isCartBumping, setIsCartBumping] = useState<boolean>(false);
+  const prevCartCountRef = useRef<number>(cartCount);
+
+  // Subtle bounce on the cart count badge when items are added
+  useEffect(() => {
+    if (cartCount > prevCartCountRef.current) {
+      setIsCartBumping(true);
+      const timer = window.setTimeout(() => setIsCartBumping(false), 380);
+      prevCartCountRef.current = cartCount;
+      return () => window.clearTimeout(timer);
+    }
+    prevCartCountRef.current = cartCount;
+  }, [cartCount]);
+
+  // Preload next hero slide image so transitions are instant with zero flash
+  useEffect(() => {
+    if (activeHeroSlides.length > 1) {
+      const nextIndex = (currentSlideIndex + 1) % activeHeroSlides.length;
+      const nextSlide = activeHeroSlides[nextIndex];
+      if (nextSlide?.imageUrl) {
+        const img = new Image();
+        img.src = nextSlide.imageUrl;
+      }
+      if (nextSlide?.mobileImageUrl) {
+        const mobImg = new Image();
+        mobImg.src = nextSlide.mobileImageUrl;
+      }
+    }
+  }, [currentSlideIndex, activeHeroSlides]);
+
 
   // Newsletter state
   const [newsletterEmail, setNewsletterEmail] = useState<string>('');
@@ -391,7 +477,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
                   <div
                     key={slide.id}
                     aria-hidden={!isCurrent}
-                    className={`absolute inset-0 transition-opacity duration-700 ease-out ${
+                    className={`absolute inset-0 transition-opacity duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                       isCurrent ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                     }`}
                   >
@@ -404,7 +490,9 @@ export const Storefront: React.FC<StorefrontProps> = ({
                         alt={slide.title || brandName}
                         loading={index === 0 ? 'eager' : 'lazy'}
                         referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover object-top sm:object-center"
+                        className={`hero-slide-zoom w-full h-full object-cover object-top sm:object-center ${
+                          isCurrent ? 'hero-slide-zoom-active' : ''
+                        }`}
                       />
                     </picture>
                     <div
@@ -425,10 +513,13 @@ export const Storefront: React.FC<StorefrontProps> = ({
               {/* Hero Overlay Content */}
               {currentHeroSlide && (
                 <div className="relative z-20 h-full max-w-[1280px] mx-auto px-3 sm:px-6 pb-10 sm:pb-14 pt-6 flex flex-col justify-end min-w-0">
-                  <div className="max-w-2xl space-y-2.5 sm:space-y-3.5 min-w-0">
+                  <div
+                    key={currentHeroSlide.id}
+                    className="max-w-2xl space-y-2.5 sm:space-y-3.5 min-w-0"
+                  >
                     {currentHeroSlide.badge && (
                       <div
-                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] sm:text-xs font-bold tracking-[0.18em] uppercase shadow-sm max-w-full"
+                        className="hero-animate-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] sm:text-xs font-bold tracking-[0.18em] uppercase shadow-sm max-w-full"
                         style={{
                           backgroundColor: 'var(--accent)',
                           color: '#1b1114',
@@ -439,21 +530,21 @@ export const Storefront: React.FC<StorefrontProps> = ({
                       </div>
                     )}
 
-                    <h1 className="font-serif text-3xl sm:text-5xl lg:text-6xl font-bold text-white leading-[1.08] tracking-tight drop-shadow-sm break-words">
+                    <h1 className="hero-animate-2 font-serif text-3xl sm:text-5xl lg:text-6xl font-bold text-white leading-[1.08] tracking-tight drop-shadow-sm break-words">
                       {currentHeroSlide.title}
                     </h1>
 
                     {currentHeroSlide.subtitle && (
-                      <p className="text-xs sm:text-base text-white/90 max-w-xl leading-relaxed line-clamp-2 sm:line-clamp-3 drop-shadow-xs break-words">
+                      <p className="hero-animate-3 text-xs sm:text-base text-white/90 max-w-xl leading-relaxed line-clamp-2 sm:line-clamp-3 drop-shadow-xs break-words">
                         {currentHeroSlide.subtitle}
                       </p>
                     )}
 
-                    <div className="pt-1.5 flex flex-wrap items-center gap-2.5 sm:gap-3">
+                    <div className="hero-animate-4 pt-1.5 flex flex-wrap items-center gap-2.5 sm:gap-3">
                       <button
                         type="button"
                         onClick={() => handleSlideCtaClick(currentHeroSlide)}
-                        className="px-5 sm:px-7 py-2.5 sm:py-3.5 rounded-lg text-xs font-bold uppercase tracking-widest shadow-lg transition hover:opacity-95 cursor-pointer"
+                        className="btn-luxury px-5 sm:px-7 py-2.5 sm:py-3.5 rounded-lg text-xs font-bold uppercase tracking-widest shadow-lg cursor-pointer"
                         style={{
                           backgroundColor: 'var(--primary)',
                           color: 'var(--btn-text)',
@@ -469,7 +560,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
                           )}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-4 sm:px-5 py-2.5 sm:py-3.5 rounded-lg text-xs font-semibold uppercase tracking-wider bg-black/45 hover:bg-black/65 text-white border border-white/25 backdrop-blur-xs transition flex items-center gap-1.5"
+                          className="btn-luxury px-4 sm:px-5 py-2.5 sm:py-3.5 rounded-lg text-xs font-semibold uppercase tracking-wider bg-black/45 hover:bg-black/65 text-white border border-white/25 backdrop-blur-xs flex items-center gap-1.5"
                         >
                           <MessageCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           <span>WhatsApp Stylist</span>
@@ -487,7 +578,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
                     type="button"
                     onClick={handlePrevSlide}
                     aria-label="Previous hero slide"
-                    className="hidden sm:flex absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white border border-white/20 items-center justify-center backdrop-blur-xs transition cursor-pointer"
+                    className="btn-luxury hidden sm:flex absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white border border-white/20 items-center justify-center backdrop-blur-xs cursor-pointer"
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
@@ -495,7 +586,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
                     type="button"
                     onClick={handleNextSlide}
                     aria-label="Next hero slide"
-                    className="hidden sm:flex absolute right-3 sm:right-5 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white border border-white/20 items-center justify-center backdrop-blur-xs transition cursor-pointer"
+                    className="btn-luxury hidden sm:flex absolute right-3 sm:right-5 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white border border-white/20 items-center justify-center backdrop-blur-xs cursor-pointer"
                   >
                     <ChevronRight className="w-5 h-5" />
                   </button>
@@ -516,7 +607,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
                           aria-selected={active}
                           aria-label={`Show slide ${idx + 1}: ${slide.title}`}
                           onClick={() => setCurrentSlideIndex(idx)}
-                          className={`h-2 rounded-full transition-all cursor-pointer ${
+                          className={`h-2 rounded-full transition-all duration-300 cursor-pointer ${
                             active ? 'w-6 bg-white' : 'w-2 bg-white/50 hover:bg-white/80'
                           }`}
                         />
@@ -526,648 +617,658 @@ export const Storefront: React.FC<StorefrontProps> = ({
                 </>
               )}
             </div>
+
           </section>
         );
 
       case 'categories':
         return (
-          <section
-            key="categories"
-            aria-label="Featured Categories"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-6 sm:pt-8 min-w-0"
-          >
-            <div className="flex flex-wrap items-end justify-between gap-2 mb-4">
-              <div className="min-w-0">
-                <span
-                  className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+          <RevealSection key="categories" sectionId="categories">
+            <section
+              aria-label="Featured Categories"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-6 sm:pt-8 min-w-0"
+            >
+              <div className="flex flex-wrap items-end justify-between gap-2 mb-4">
+                <div className="min-w-0">
+                  <span
+                    className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                    style={{ color: 'var(--primary)' }}
+                  >
+                    Curated Silks & Craft
+                  </span>
+                  <h2
+                    className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    {storeSettings.categoriesTitle || 'Featured Categories'}
+                  </h2>
+                  {storeSettings.categoriesSubtitle && (
+                    <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-secondary)' }}>
+                      {storeSettings.categoriesSubtitle}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCategoryChange('All');
+                    scrollToCatalog();
+                  }}
+                  className="nav-link-underline text-xs font-semibold uppercase tracking-wider hover:underline shrink-0 cursor-pointer"
                   style={{ color: 'var(--primary)' }}
                 >
-                  Curated Silks & Craft
-                </span>
-                <h2
-                  className="font-serif text-2xl sm:text-3xl font-bold break-words"
-                  style={{ color: 'var(--text-main)' }}
-                >
-                  {storeSettings.categoriesTitle || 'Featured Categories'}
-                </h2>
-                {storeSettings.categoriesSubtitle && (
-                  <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-secondary)' }}>
-                    {storeSettings.categoriesSubtitle}
-                  </p>
-                )}
+                  View All ({products.length}) →
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  onCategoryChange('All');
-                  scrollToCatalog();
-                }}
-                className="text-xs font-semibold uppercase tracking-wider hover:underline shrink-0 cursor-pointer"
-                style={{ color: 'var(--primary)' }}
-              >
-                View All ({products.length}) →
-              </button>
-            </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
-              {FEATURED_CATEGORY_CARDS.map((card) => {
-                const count = products.filter(
-                  (p) => p.category.toLowerCase() === card.id.toLowerCase()
-                ).length;
-                const isSelected = activeCategory === card.id;
-                return (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() => {
-                      onCategoryChange(card.id);
-                      scrollToCatalog();
-                    }}
-                    className="group relative aspect-[4/5] sm:aspect-[3/4] rounded-xl overflow-hidden border text-left cursor-pointer shadow-sm transition-transform hover:-translate-y-0.5 min-w-0"
-                    style={{
-                      borderColor: isSelected ? 'var(--primary)' : 'var(--border)',
-                    }}
-                  >
-                    <img
-                      src={card.image}
-                      alt={card.title}
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover object-top transition-transform duration-700 group-hover:scale-105"
-                    />
-                    <div
-                      className="absolute inset-0"
-                      style={{
-                        background:
-                          'linear-gradient(to top, rgba(16, 8, 11, 0.88) 0%, rgba(16, 8, 11, 0.25) 55%, rgba(16, 8, 11, 0.05) 100%)',
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 min-w-0">
+                {FEATURED_CATEGORY_CARDS.map((card) => {
+                  const count = products.filter(
+                    (p) => p.category.toLowerCase() === card.id.toLowerCase()
+                  ).length;
+                  const isSelected = activeCategory === card.id;
+                  return (
+                    <button
+                      key={card.id}
+                      type="button"
+                      onClick={() => {
+                        onCategoryChange(card.id);
+                        scrollToCatalog();
                       }}
-                    />
-                    <div className="absolute inset-x-0 bottom-0 p-3 sm:p-4 text-white">
-                      <span className="inline-block text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-white/20 backdrop-blur-xs mb-1">
-                        {count} {count === 1 ? 'Design' : 'Designs'}
-                      </span>
-                      <h3 className="font-serif text-base sm:text-xl font-bold leading-snug break-words">
-                        {card.title}
-                      </h3>
-                      <p className="text-[11px] text-white/80 line-clamp-1 mt-0.5">
-                        {card.subtitle}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+                      className="group relative aspect-[4/5] sm:aspect-[3/4] rounded-xl overflow-hidden border text-left cursor-pointer shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg min-w-0"
+                      style={{
+                        borderColor: isSelected ? 'var(--primary)' : 'var(--border)',
+                      }}
+                    >
+                      <img
+                        src={card.image}
+                        alt={card.title}
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover object-top transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-105"
+                      />
+                      <div
+                        className="absolute inset-0"
+                        style={{
+                          background:
+                            'linear-gradient(to top, rgba(16, 8, 11, 0.88) 0%, rgba(16, 8, 11, 0.25) 55%, rgba(16, 8, 11, 0.05) 100%)',
+                        }}
+                      />
+                      <div className="absolute inset-x-0 bottom-0 p-3 sm:p-4 text-white">
+                        <span className="inline-block text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-white/20 backdrop-blur-xs mb-1">
+                          {count} {count === 1 ? 'Design' : 'Designs'}
+                        </span>
+                        <h3 className="font-serif text-base sm:text-xl font-bold leading-snug break-words">
+                          {card.title}
+                        </h3>
+                        <p className="text-[11px] text-white/80 line-clamp-1 mt-0.5">
+                          {card.subtitle}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          </RevealSection>
         );
 
       case 'newArrivals':
         if (newArrivalProducts.length === 0) return null;
         return (
-          <section
-            key="newArrivals"
-            aria-label="New Arrivals"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
-          >
-            <div className="flex flex-wrap items-end justify-between gap-2 mb-4">
-              <div className="min-w-0">
+          <RevealSection key="newArrivals" sectionId="newArrivals">
+            <section
+              aria-label="New Arrivals"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+            >
+              <div className="flex flex-wrap items-end justify-between gap-2 mb-4">
+                <div className="min-w-0">
+                  <span
+                    className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                    style={{ color: 'var(--primary)' }}
+                  >
+                    Fresh From Our Looms
+                  </span>
+                  <h2
+                    className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                    style={{ color: 'var(--text-main)' }}
+                  >
+                    {storeSettings.newArrivalsTitle || 'New Season Arrivals'}
+                  </h2>
+                  {storeSettings.newArrivalsSubtitle && (
+                    <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-secondary)' }}>
+                      {storeSettings.newArrivalsSubtitle}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={scrollToCatalog}
+                  className="nav-link-underline text-xs font-semibold uppercase tracking-wider hover:underline shrink-0 cursor-pointer"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  Browse Full Collection →
+                </button>
+              </div>
+
+              <div className={`grid ${desktopGridColsClass} gap-4 sm:gap-5 min-w-0`}>
+                {newArrivalProducts.map((product) => (
+                  <ProductCard
+                    key={`new-arrival-${product.id}`}
+                    product={product}
+                    storeSettings={storeSettings}
+                    onAddToCart={onAddToCart}
+                    onWishlistClick={onWishlistClick}
+                    onSelectProduct={onSelectProduct}
+                  />
+                ))}
+              </div>
+            </section>
+          </RevealSection>
+        );
+
+
+      case 'promoBanner':
+        return (
+          <RevealSection key="promoBanner" sectionId="promoBanner">
+            <section
+              aria-label="Promotional Spotlight"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+            >
+              <div
+                className="relative rounded-2xl overflow-hidden border shadow-md min-h-[220px] sm:min-h-[260px] flex items-center"
+                style={{ borderColor: 'var(--border)' }}
+              >
+                {promoBanner.imageUrl && (
+                  <img
+                    src={promoBanner.imageUrl}
+                    alt={promoBanner.heading}
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    className="absolute inset-0 w-full h-full object-cover object-center"
+                  />
+                )}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    background:
+                      'linear-gradient(90deg, rgba(16, 8, 11, 0.88) 0%, rgba(16, 8, 11, 0.68) 55%, rgba(16, 8, 11, 0.35) 100%)',
+                  }}
+                />
+                <div className="relative z-10 p-6 sm:p-10 max-w-2xl text-white space-y-3 min-w-0">
+                  {promoBanner.badge && (
+                    <span
+                      className="inline-block text-[10px] font-bold uppercase tracking-[0.2em] px-3 py-1 rounded"
+                      style={{
+                        backgroundColor: 'var(--accent)',
+                        color: '#1b1114',
+                      }}
+                    >
+                      {promoBanner.badge}
+                    </span>
+                  )}
+                  <h2 className="font-serif text-2xl sm:text-4xl font-bold leading-tight break-words">
+                    {promoBanner.heading}
+                  </h2>
+                  {promoBanner.subtext && (
+                    <p className="text-xs sm:text-sm text-white/90 leading-relaxed break-words">
+                      {promoBanner.subtext}
+                    </p>
+                  )}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (
+                          promoBanner.ctaCategory &&
+                          CATEGORIES.includes(promoBanner.ctaCategory)
+                        ) {
+                          onCategoryChange(promoBanner.ctaCategory);
+                        }
+                        scrollToCatalog();
+                      }}
+                      className="px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest transition cursor-pointer btn-luxury active:scale-95"
+                      style={{
+                        backgroundColor: 'var(--primary)',
+                        color: 'var(--btn-text)',
+                      }}
+                    >
+                      {promoBanner.ctaText || 'Explore Sarees'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </RevealSection>
+        );
+
+      case 'story':
+        return (
+          <RevealSection key="story" sectionId="story">
+            <section
+              id="story"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+            >
+              <div
+                className="rounded-2xl border p-5 sm:p-8 shadow-xs transition-colors min-w-0"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                }}
+              >
+                <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_0.8fr] gap-6 items-center min-w-0">
+                  <div className="space-y-3 min-w-0">
+                    <div
+                      className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.18em]"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                      <span>{brandTagline}</span>
+                    </div>
+                    <h2
+                      className="font-serif text-2xl sm:text-3xl font-bold leading-snug break-words"
+                      style={{ color: 'var(--text-main)' }}
+                    >
+                      {storeSettings.storyHeading || `The ${brandName} Heritage`}
+                    </h2>
+                    {storeSettings.storyQuote && (
+                      <p
+                        className="font-serif italic text-base sm:text-lg break-words"
+                        style={{ color: 'var(--primary)' }}
+                      >
+                        {storeSettings.storyQuote}
+                      </p>
+                    )}
+                    <p
+                      className="text-xs sm:text-sm leading-relaxed break-words"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      {brandDescription}
+                    </p>
+
+                    {(storeAddress || storePhone || mapsUrl) && (
+                      <div className="pt-2 flex flex-wrap items-center gap-2 text-xs">
+                        {storeAddress && (
+                          <span
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border max-w-full"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            <MapPin
+                              className="w-3.5 h-3.5 shrink-0"
+                              style={{ color: 'var(--primary)' }}
+                            />
+                            <span className="truncate">{storeAddress}</span>
+                          </span>
+                        )}
+                        {storePhone && (
+                          <a
+                            href={`tel:${storePhone.replace(/\s+/g, '')}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium hover:opacity-90 transition-opacity"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--text-main)',
+                            }}
+                          >
+                            <Phone
+                              className="w-3.5 h-3.5 shrink-0"
+                              style={{ color: 'var(--primary)' }}
+                            />
+                            <span>{storePhone}</span>
+                          </a>
+                        )}
+                        {mapsUrl && (
+                          <a
+                            href={mapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border font-semibold hover:opacity-90 transition-opacity"
+                            style={{
+                              backgroundColor: 'var(--surface-elevated)',
+                              borderColor: 'var(--border)',
+                              color: 'var(--primary)',
+                            }}
+                          >
+                            <span>Directions</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Trust & Authenticity Pillars */}
+                  <div className="grid grid-cols-2 gap-3 min-w-0">
+                    {[
+                      {
+                        icon: Award,
+                        title: 'Authentic Weaves',
+                        desc: '100% pure zari & handloom certified',
+                      },
+                      {
+                        icon: Truck,
+                        title: 'Insured Delivery',
+                        desc: `Free shipping above ₹${(
+                          storeSettings.freeShippingThreshold ?? 1999
+                        ).toLocaleString('en-IN')}`,
+                      },
+                      {
+                        icon: RefreshCcw,
+                        title: 'Easy 7-Day Returns',
+                        desc: 'Hassle-free size exchange',
+                      },
+                      {
+                        icon: ShieldCheck,
+                        title: 'Secure Checkout',
+                        desc: 'Dynamic UPI QR & COD support',
+                      },
+                    ].map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3.5 rounded-xl border flex flex-col gap-1.5 min-w-0 transition-transform duration-300 hover:-translate-y-0.5"
+                        style={{
+                          backgroundColor: 'var(--surface-elevated)',
+                          borderColor: 'var(--border)',
+                        }}
+                      >
+                        <item.icon className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
+                        <strong
+                          className="text-xs font-semibold block break-words"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          {item.title}
+                        </strong>
+                        <span
+                          className="text-[11px] leading-snug break-words"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          {item.desc}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </RevealSection>
+        );
+
+      case 'collections':
+        return (
+          <RevealSection key="collections" sectionId="collections">
+            <section
+              aria-label="Additional Curated Collections"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+            >
+              <div className="mb-4">
                 <span
                   className="text-[11px] font-bold uppercase tracking-[0.18em] block"
                   style={{ color: 'var(--primary)' }}
                 >
-                  Fresh From Our Looms
+                  Regional Craft Edits
                 </span>
                 <h2
                   className="font-serif text-2xl sm:text-3xl font-bold break-words"
                   style={{ color: 'var(--text-main)' }}
                 >
-                  {storeSettings.newArrivalsTitle || 'New Season Arrivals'}
+                  Curated Heritage Capsules
                 </h2>
-                {storeSettings.newArrivalsSubtitle && (
-                  <p className="text-xs mt-0.5 break-words" style={{ color: 'var(--text-secondary)' }}>
-                    {storeSettings.newArrivalsSubtitle}
-                  </p>
-                )}
               </div>
-              <button
-                type="button"
-                onClick={scrollToCatalog}
-                className="text-xs font-semibold uppercase tracking-wider hover:underline shrink-0 cursor-pointer"
-                style={{ color: 'var(--primary)' }}
-              >
-                Browse Full Collection →
-              </button>
-            </div>
 
-            <div className={`grid ${desktopGridColsClass} gap-4 sm:gap-5 min-w-0`}>
-              {newArrivalProducts.map((product) => (
-                <ProductCard
-                  key={`new-arrival-${product.id}`}
-                  product={product}
-                  storeSettings={storeSettings}
-                  onAddToCart={onAddToCart}
-                  onWishlistClick={onWishlistClick}
-                  onSelectProduct={onSelectProduct}
-                />
-              ))}
-            </div>
-          </section>
-        );
-
-      case 'promoBanner':
-        return (
-          <section
-            key="promoBanner"
-            aria-label="Promotional Spotlight"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
-          >
-            <div
-              className="relative rounded-2xl overflow-hidden border shadow-md min-h-[220px] sm:min-h-[260px] flex items-center"
-              style={{ borderColor: 'var(--border)' }}
-            >
-              {promoBanner.imageUrl && (
-                <img
-                  src={promoBanner.imageUrl}
-                  alt={promoBanner.heading}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  className="absolute inset-0 w-full h-full object-cover object-center"
-                />
-              )}
-              <div
-                className="absolute inset-0"
-                style={{
-                  background:
-                    'linear-gradient(90deg, rgba(16, 8, 11, 0.88) 0%, rgba(16, 8, 11, 0.68) 55%, rgba(16, 8, 11, 0.35) 100%)',
-                }}
-              />
-              <div className="relative z-10 p-6 sm:p-10 max-w-2xl text-white space-y-3 min-w-0">
-                {promoBanner.badge && (
-                  <span
-                    className="inline-block text-[10px] font-bold uppercase tracking-[0.2em] px-3 py-1 rounded"
-                    style={{
-                      backgroundColor: 'var(--accent)',
-                      color: '#1b1114',
-                    }}
-                  >
-                    {promoBanner.badge}
-                  </span>
-                )}
-                <h2 className="font-serif text-2xl sm:text-4xl font-bold leading-tight break-words">
-                  {promoBanner.heading}
-                </h2>
-                {promoBanner.subtext && (
-                  <p className="text-xs sm:text-sm text-white/90 leading-relaxed break-words">
-                    {promoBanner.subtext}
-                  </p>
-                )}
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (
-                        promoBanner.ctaCategory &&
-                        CATEGORIES.includes(promoBanner.ctaCategory)
-                      ) {
-                        onCategoryChange(promoBanner.ctaCategory);
-                      }
-                      scrollToCatalog();
-                    }}
-                    className="px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest transition cursor-pointer"
-                    style={{
-                      backgroundColor: 'var(--primary)',
-                      color: 'var(--btn-text)',
-                    }}
-                  >
-                    {promoBanner.ctaText || 'Explore Sarees'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-        );
-
-      case 'story':
-        return (
-          <section
-            key="story"
-            id="story"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
-          >
-            <div
-              className="rounded-2xl border p-5 sm:p-8 shadow-xs transition-colors min-w-0"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_0.8fr] gap-6 items-center min-w-0">
-                <div className="space-y-3 min-w-0">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+                {CURATED_CRAFT_COLLECTIONS.map((col) => (
                   <div
-                    className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.18em]"
-                    style={{ color: 'var(--primary)' }}
+                    key={col.title}
+                    className="group rounded-xl overflow-hidden border flex flex-col justify-between shadow-2xs min-w-0 transition-all duration-300 hover:shadow-md"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                    }}
                   >
-                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                    <span>{brandTagline}</span>
+                    <div className="relative aspect-[16/10] overflow-hidden">
+                      <img
+                        src={col.image}
+                        alt={col.title}
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                      />
+                      <span
+                        className="absolute top-3 left-3 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded shadow-xs"
+                        style={{
+                          backgroundColor: 'var(--primary)',
+                          color: 'var(--btn-text)',
+                        }}
+                      >
+                        {col.badge}
+                      </span>
+                    </div>
+                    <div className="p-4 space-y-2 flex-1 flex flex-col justify-between min-w-0">
+                      <div>
+                        <h3
+                          className="font-serif text-xl font-bold break-words"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          {col.title}
+                        </h3>
+                        <p
+                          className="text-xs mt-1 leading-relaxed break-words"
+                          style={{ color: 'var(--text-secondary)' }}
+                        >
+                          {col.desc}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onCategoryChange(col.id);
+                          scrollToCatalog();
+                        }}
+                        className="pt-2 text-xs font-semibold uppercase tracking-wider text-left hover:underline cursor-pointer transition-colors"
+                        style={{ color: 'var(--primary)' }}
+                      >
+                        Explore {col.id} →
+                      </button>
+                    </div>
                   </div>
-                  <h2
-                    className="font-serif text-2xl sm:text-3xl font-bold leading-snug break-words"
-                    style={{ color: 'var(--text-main)' }}
-                  >
-                    {storeSettings.storyHeading || `The ${brandName} Heritage`}
-                  </h2>
-                  {storeSettings.storyQuote && (
-                    <p
-                      className="font-serif italic text-base sm:text-lg break-words"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      {storeSettings.storyQuote}
-                    </p>
-                  )}
-                  <p
-                    className="text-xs sm:text-sm leading-relaxed break-words"
-                    style={{ color: 'var(--text-secondary)' }}
-                  >
-                    {brandDescription}
-                  </p>
+                ))}
+              </div>
+            </section>
+          </RevealSection>
+        );
 
-                  {(storeAddress || storePhone || mapsUrl) && (
-                    <div className="pt-2 flex flex-wrap items-center gap-2 text-xs">
-                      {storeAddress && (
+      case 'testimonials':
+        if (testimonials.length === 0) return null;
+        return (
+          <RevealSection key="testimonials" sectionId="testimonials">
+            <section
+              aria-label="Customer Testimonials"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+            >
+              <div className="mb-4">
+                <span
+                  className="text-[11px] font-bold uppercase tracking-[0.18em] block"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  Verified Patron Stories
+                </span>
+                <h2
+                  className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  Customer Love & Testimonials
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+                {testimonials.map((t) => (
+                  <div
+                    key={t.id}
+                    className="p-5 rounded-xl border flex flex-col justify-between gap-3 shadow-2xs min-w-0 transition-transform duration-300 hover:-translate-y-0.5"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                    }}
+                  >
+                    <div className="space-y-2.5 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-0.5" style={{ color: 'var(--accent)' }}>
+                          {Array.from({ length: Math.min(5, Math.max(1, t.rating || 5)) }).map(
+                            (_, i) => (
+                              <Star key={i} className="w-3.5 h-3.5 fill-current" />
+                            )
+                          )}
+                        </div>
+                        <Quote
+                          className="w-4 h-4 opacity-30 shrink-0"
+                          style={{ color: 'var(--primary)' }}
+                        />
+                      </div>
+                      <p
+                        className="text-xs leading-relaxed italic break-words"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        “{t.quote}”
+                      </p>
+                    </div>
+                    <div
+                      className="pt-2 border-t flex items-center justify-between gap-2 text-xs"
+                      style={{ borderColor: 'var(--border)' }}
+                    >
+                      <div className="min-w-0">
+                        <strong
+                          className="block font-semibold truncate"
+                          style={{ color: 'var(--text-main)' }}
+                        >
+                          {t.customerName}
+                        </strong>
+                        {t.location && (
+                          <span
+                            className="text-[11px] truncate block"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            {t.location}
+                          </span>
+                        )}
+                      </div>
+                      {t.productBought && (
                         <span
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border max-w-full"
-                          style={{
-                            backgroundColor: 'var(--surface-elevated)',
-                            borderColor: 'var(--border)',
-                            color: 'var(--text-secondary)',
-                          }}
-                        >
-                          <MapPin
-                            className="w-3.5 h-3.5 shrink-0"
-                            style={{ color: 'var(--primary)' }}
-                          />
-                          <span className="truncate">{storeAddress}</span>
-                        </span>
-                      )}
-                      {storePhone && (
-                        <a
-                          href={`tel:${storePhone.replace(/\s+/g, '')}`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium hover:opacity-90"
-                          style={{
-                            backgroundColor: 'var(--surface-elevated)',
-                            borderColor: 'var(--border)',
-                            color: 'var(--text-main)',
-                          }}
-                        >
-                          <Phone
-                            className="w-3.5 h-3.5 shrink-0"
-                            style={{ color: 'var(--primary)' }}
-                          />
-                          <span>{storePhone}</span>
-                        </a>
-                      )}
-                      {mapsUrl && (
-                        <a
-                          href={mapsUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border font-semibold hover:opacity-90"
+                          className="text-[10px] font-semibold px-2 py-0.5 rounded border truncate max-w-[45%]"
                           style={{
                             backgroundColor: 'var(--surface-elevated)',
                             borderColor: 'var(--border)',
                             color: 'var(--primary)',
                           }}
                         >
-                          <span>Directions</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
+                          {t.productBought}
+                        </span>
                       )}
                     </div>
-                  )}
-                </div>
-
-                {/* Trust & Authenticity Pillars */}
-                <div className="grid grid-cols-2 gap-3 min-w-0">
-                  {[
-                    {
-                      icon: Award,
-                      title: 'Authentic Weaves',
-                      desc: '100% pure zari & handloom certified',
-                    },
-                    {
-                      icon: Truck,
-                      title: 'Insured Delivery',
-                      desc: `Free shipping above ₹${(
-                        storeSettings.freeShippingThreshold ?? 1999
-                      ).toLocaleString('en-IN')}`,
-                    },
-                    {
-                      icon: RefreshCcw,
-                      title: 'Easy 7-Day Returns',
-                      desc: 'Hassle-free size exchange',
-                    },
-                    {
-                      icon: ShieldCheck,
-                      title: 'Secure Checkout',
-                      desc: 'Dynamic UPI QR & COD support',
-                    },
-                  ].map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3.5 rounded-xl border flex flex-col gap-1.5 min-w-0"
-                      style={{
-                        backgroundColor: 'var(--surface-elevated)',
-                        borderColor: 'var(--border)',
-                      }}
-                    >
-                      <item.icon className="w-4 h-4 shrink-0" style={{ color: 'var(--primary)' }} />
-                      <strong
-                        className="text-xs font-semibold block break-words"
-                        style={{ color: 'var(--text-main)' }}
-                      >
-                        {item.title}
-                      </strong>
-                      <span
-                        className="text-[11px] leading-snug break-words"
-                        style={{ color: 'var(--text-muted)' }}
-                      >
-                        {item.desc}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          </section>
+            </section>
+          </RevealSection>
         );
 
-      case 'collections':
+      case 'newsletter':
         return (
-          <section
-            key="collections"
-            aria-label="Additional Curated Collections"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
-          >
-            <div className="mb-4">
-              <span
-                className="text-[11px] font-bold uppercase tracking-[0.18em] block"
-                style={{ color: 'var(--primary)' }}
+          <RevealSection key="newsletter" sectionId="newsletter">
+            <section
+              aria-label="Newsletter Dispatch"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
+            >
+              <div
+                className="rounded-2xl border p-6 sm:p-8 text-center max-w-3xl mx-auto space-y-3 shadow-xs"
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  borderColor: 'var(--border)',
+                }}
               >
-                Regional Craft Edits
-              </span>
-              <h2
-                className="font-serif text-2xl sm:text-3xl font-bold break-words"
-                style={{ color: 'var(--text-main)' }}
-              >
-                Curated Heritage Capsules
-              </h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
-              {CURATED_CRAFT_COLLECTIONS.map((col) => (
                 <div
-                  key={col.title}
-                  className="group rounded-xl overflow-hidden border flex flex-col justify-between shadow-2xs min-w-0"
+                  className="w-10 h-10 rounded-full flex items-center justify-center mx-auto border"
                   style={{
-                    backgroundColor: 'var(--surface)',
+                    backgroundColor: 'var(--surface-elevated)',
                     borderColor: 'var(--border)',
+                    color: 'var(--primary)',
                   }}
                 >
-                  <div className="relative aspect-[16/10] overflow-hidden">
-                    <img
-                      src={col.image}
-                      alt={col.title}
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                  <Mail className="w-4 h-4" />
+                </div>
+                <h2
+                  className="font-serif text-2xl sm:text-3xl font-bold break-words"
+                  style={{ color: 'var(--text-main)' }}
+                >
+                  {storeSettings.newsletterHeading || 'Join the Indian Ishq Privé List'}
+                </h2>
+                <p
+                  className="text-xs sm:text-sm max-w-xl mx-auto leading-relaxed break-words"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  {storeSettings.newsletterSubtext ||
+                    'Receive early access to small-batch Banarasi weaves, seasonal Chanderi edits, and private boutique previews.'}
+                </p>
+
+                {newsletterSubmitted ? (
+                  <div
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border text-xs font-semibold transition-all duration-300"
+                    style={{
+                      backgroundColor: 'var(--success-bg)',
+                      borderColor: 'var(--success-border)',
+                      color: 'var(--success-text)',
+                    }}
+                  >
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>Thank you for subscribing! You are on our private preview list.</span>
+                  </div>
+                ) : (
+                  <form
+                    onSubmit={handleNewsletterSubmit}
+                    className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 max-w-md mx-auto pt-2"
+                  >
+                    <input
+                      type="email"
+                      required
+                      value={newsletterEmail}
+                      onChange={(e) => setNewsletterEmail(e.target.value)}
+                      placeholder="Enter your email address..."
+                      aria-label="Email address for newsletter"
+                      className="flex-1 min-w-0 px-3.5 py-2.5 rounded-lg border text-xs outline-none focus:ring-1 focus:ring-[var(--primary)] transition-all"
+                      style={{
+                        backgroundColor: 'var(--input-bg)',
+                        borderColor: 'var(--border)',
+                        color: 'var(--text-main)',
+                      }}
                     />
-                    <span
-                      className="absolute top-3 left-3 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded shadow-xs"
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest cursor-pointer shrink-0 btn-luxury active:scale-95"
                       style={{
                         backgroundColor: 'var(--primary)',
                         color: 'var(--btn-text)',
                       }}
                     >
-                      {col.badge}
-                    </span>
-                  </div>
-                  <div className="p-4 space-y-2 flex-1 flex flex-col justify-between min-w-0">
-                    <div>
-                      <h3
-                        className="font-serif text-xl font-bold break-words"
-                        style={{ color: 'var(--text-main)' }}
-                      >
-                        {col.title}
-                      </h3>
-                      <p
-                        className="text-xs mt-1 leading-relaxed break-words"
-                        style={{ color: 'var(--text-secondary)' }}
-                      >
-                        {col.desc}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onCategoryChange(col.id);
-                        scrollToCatalog();
-                      }}
-                      className="pt-2 text-xs font-semibold uppercase tracking-wider text-left hover:underline cursor-pointer"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      Explore {col.id} →
+                      Subscribe
                     </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        );
-
-      case 'testimonials':
-        if (testimonials.length === 0) return null;
-        return (
-          <section
-            key="testimonials"
-            aria-label="Customer Testimonials"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
-          >
-            <div className="mb-4">
-              <span
-                className="text-[11px] font-bold uppercase tracking-[0.18em] block"
-                style={{ color: 'var(--primary)' }}
-              >
-                Verified Patron Stories
-              </span>
-              <h2
-                className="font-serif text-2xl sm:text-3xl font-bold break-words"
-                style={{ color: 'var(--text-main)' }}
-              >
-                Customer Love & Testimonials
-              </h2>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
-              {testimonials.map((t) => (
-                <div
-                  key={t.id}
-                  className="p-5 rounded-xl border flex flex-col justify-between gap-3 shadow-2xs min-w-0"
-                  style={{
-                    backgroundColor: 'var(--surface)',
-                    borderColor: 'var(--border)',
-                  }}
-                >
-                  <div className="space-y-2.5 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-0.5" style={{ color: 'var(--accent)' }}>
-                        {Array.from({ length: Math.min(5, Math.max(1, t.rating || 5)) }).map(
-                          (_, i) => (
-                            <Star key={i} className="w-3.5 h-3.5 fill-current" />
-                          )
-                        )}
-                      </div>
-                      <Quote
-                        className="w-4 h-4 opacity-30 shrink-0"
-                        style={{ color: 'var(--primary)' }}
-                      />
-                    </div>
-                    <p
-                      className="text-xs leading-relaxed italic break-words"
-                      style={{ color: 'var(--text-secondary)' }}
-                    >
-                      “{t.quote}”
-                    </p>
-                  </div>
-                  <div
-                    className="pt-2 border-t flex items-center justify-between gap-2 text-xs"
-                    style={{ borderColor: 'var(--border)' }}
-                  >
-                    <div className="min-w-0">
-                      <strong
-                        className="block font-semibold truncate"
-                        style={{ color: 'var(--text-main)' }}
-                      >
-                        {t.customerName}
-                      </strong>
-                      {t.location && (
-                        <span
-                          className="text-[11px] truncate block"
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          {t.location}
-                        </span>
-                      )}
-                    </div>
-                    {t.productBought && (
-                      <span
-                        className="text-[10px] font-semibold px-2 py-0.5 rounded border truncate max-w-[45%]"
-                        style={{
-                          backgroundColor: 'var(--surface-elevated)',
-                          borderColor: 'var(--border)',
-                          color: 'var(--primary)',
-                        }}
-                      >
-                        {t.productBought}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        );
-
-      case 'newsletter':
-        return (
-          <section
-            key="newsletter"
-            aria-label="Newsletter Dispatch"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 pt-8 sm:pt-10 min-w-0"
-          >
-            <div
-              className="rounded-2xl border p-6 sm:p-8 text-center max-w-3xl mx-auto space-y-3 shadow-xs"
-              style={{
-                backgroundColor: 'var(--surface)',
-                borderColor: 'var(--border)',
-              }}
-            >
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center mx-auto border"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: 'var(--border)',
-                  color: 'var(--primary)',
-                }}
-              >
-                <Mail className="w-4 h-4" />
+                  </form>
+                )}
               </div>
-              <h2
-                className="font-serif text-2xl sm:text-3xl font-bold break-words"
-                style={{ color: 'var(--text-main)' }}
-              >
-                {storeSettings.newsletterHeading || 'Join the Indian Ishq Privé List'}
-              </h2>
-              <p
-                className="text-xs sm:text-sm max-w-xl mx-auto leading-relaxed break-words"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {storeSettings.newsletterSubtext ||
-                  'Receive early access to small-batch Banarasi weaves, seasonal Chanderi edits, and private boutique previews.'}
-              </p>
-
-              {newsletterSubmitted ? (
-                <div
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border text-xs font-semibold"
-                  style={{
-                    backgroundColor: 'var(--success-bg)',
-                    borderColor: 'var(--success-border)',
-                    color: 'var(--success-text)',
-                  }}
-                >
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>Thank you for subscribing! You are on our private preview list.</span>
-                </div>
-              ) : (
-                <form
-                  onSubmit={handleNewsletterSubmit}
-                  className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 max-w-md mx-auto pt-2"
-                >
-                  <input
-                    type="email"
-                    required
-                    value={newsletterEmail}
-                    onChange={(e) => setNewsletterEmail(e.target.value)}
-                    placeholder="Enter your email address..."
-                    aria-label="Email address for newsletter"
-                    className="flex-1 min-w-0 px-3.5 py-2.5 rounded-lg border text-xs outline-none"
-                    style={{
-                      backgroundColor: 'var(--input-bg)',
-                      borderColor: 'var(--border)',
-                      color: 'var(--text-main)',
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    className="px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest cursor-pointer shrink-0"
-                    style={{
-                      backgroundColor: 'var(--primary)',
-                      color: 'var(--btn-text)',
-                    }}
-                  >
-                    Subscribe
-                  </button>
-                </form>
-              )}
-            </div>
-          </section>
+            </section>
+          </RevealSection>
         );
 
       case 'bestsellers':
         return (
-          <main
-            key="bestsellers"
-            id="catalog"
-            className="max-w-[1280px] mx-auto px-3 sm:px-4 py-8 sm:py-10 min-w-0"
-          >
+          <RevealSection key="bestsellers" sectionId="bestsellers">
+            <main
+              key="bestsellers"
+              id="catalog"
+              className="max-w-[1280px] mx-auto px-3 sm:px-4 py-8 sm:py-10 min-w-0"
+            >
             <div id="shop" />
             {/* Section Heading & Controls */}
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-5 min-w-0">
@@ -1518,7 +1619,8 @@ export const Storefront: React.FC<StorefrontProps> = ({
               )}
             </section>
           </main>
-        );
+        </RevealSection>
+      );
 
       default:
         return null;
@@ -1549,48 +1651,66 @@ export const Storefront: React.FC<StorefrontProps> = ({
         )}
 
         <div className="max-w-[1280px] mx-auto px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-2 min-w-0">
-          {/* Brand Logo */}
-          <a
-            href="#top"
-            className="flex items-center gap-2.5 group focus:outline-none min-w-0 shrink"
-          >
-            {storeSettings.logoUrl ? (
-              <img
-                src={storeSettings.logoUrl}
-                alt={brandName}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shadow-sm border shrink-0"
-                style={{ borderColor: 'var(--border)' }}
-              />
-            ) : (
-              <div
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-serif font-bold text-base sm:text-lg tracking-wider shadow-sm transition-transform group-hover:scale-105 shrink-0"
-                style={{
-                  backgroundColor: 'var(--primary)',
-                  color: 'var(--btn-text)',
-                  border: '2px solid var(--accent)',
-                }}
-              >
-                {brandName.slice(0, 2).toUpperCase()}
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Mobile Hamburger Navigation Button */}
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              aria-label={isMobileMenuOpen ? 'Close Navigation Menu' : 'Open Navigation Menu'}
+              aria-expanded={isMobileMenuOpen}
+              className="xl:hidden w-8 h-8 rounded-lg border flex items-center justify-center transition-all cursor-pointer shrink-0 btn-luxury active:scale-95"
+              style={{
+                backgroundColor: 'var(--surface-elevated)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-main)',
+              }}
+            >
+              {isMobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+            </button>
+
+            {/* Brand Logo */}
+            <a
+              href="#top"
+              className="flex items-center gap-2.5 group focus:outline-none min-w-0 shrink"
+            >
+              {storeSettings.logoUrl ? (
+                <img
+                  src={storeSettings.logoUrl}
+                  alt={brandName}
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover shadow-sm border shrink-0 transition-transform group-hover:scale-105"
+                  style={{ borderColor: 'var(--border)' }}
+                />
+              ) : (
+                <div
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-serif font-bold text-base sm:text-lg tracking-wider shadow-sm transition-transform group-hover:scale-105 shrink-0"
+                  style={{
+                    backgroundColor: 'var(--primary)',
+                    color: 'var(--btn-text)',
+                    border: '2px solid var(--accent)',
+                  }}
+                >
+                  {brandName.slice(0, 2).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <span
+                  className="font-serif text-lg sm:text-2xl font-bold tracking-wide block leading-none truncate"
+                  style={{ color: 'var(--primary)' }}
+                >
+                  {brandName}
+                </span>
+                <span
+                  className="hidden sm:block text-[10px] tracking-[0.18em] uppercase font-medium mt-0.5 truncate"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {brandTagline}
+                </span>
               </div>
-            )}
-            <div className="min-w-0">
-              <span
-                className="font-serif text-lg sm:text-2xl font-bold tracking-wide block leading-none truncate"
-                style={{ color: 'var(--primary)' }}
-              >
-                {brandName}
-              </span>
-              <span
-                className="hidden sm:block text-[10px] tracking-[0.18em] uppercase font-medium mt-0.5 truncate"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                {brandTagline}
-              </span>
-            </div>
-          </a>
+            </a>
+          </div>
 
           {/* Desktop Quick Category Links */}
-          <nav aria-label="Primary Categories" className="hidden xl:flex items-center gap-1">
+          <nav aria-label="Primary Categories" className="hidden xl:flex items-center gap-1.5">
             {CATEGORIES.map((cat) => {
               const isActive = activeCategory === cat;
               return (
@@ -1598,7 +1718,9 @@ export const Storefront: React.FC<StorefrontProps> = ({
                   key={cat}
                   href="#catalog"
                   onClick={() => onCategoryChange(cat)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors"
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 nav-link-boutique relative ${
+                    isActive ? 'font-bold' : ''
+                  }`}
                   style={{
                     backgroundColor: isActive ? 'var(--primary)' : 'transparent',
                     color: isActive ? 'var(--btn-text)' : 'var(--text-main)',
@@ -1724,12 +1846,14 @@ export const Storefront: React.FC<StorefrontProps> = ({
               </button>
             )}
 
-            {/* Shopping Bag Button */}
+            {/* Shopping Bag Button with Cart Bump Micro-interaction */}
             <button
               type="button"
               onClick={onOpenCart}
               aria-label={`Open shopping bag with ${cartCount} items`}
-              className="px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase transition flex items-center gap-1.5 shadow-xs cursor-pointer shrink-0"
+              className={`px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wider uppercase transition-all flex items-center gap-1.5 shadow-xs cursor-pointer shrink-0 btn-luxury active:scale-95 ${
+                isCartBumping ? 'bag-badge-bump ring-2 ring-[var(--accent)] ring-offset-1' : ''
+              }`}
               style={{
                 backgroundColor: 'var(--primary)',
                 color: 'var(--btn-text)',
@@ -1738,7 +1862,9 @@ export const Storefront: React.FC<StorefrontProps> = ({
               <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">Bag</span>
               <span
-                className="px-1.5 py-0.2 rounded-full text-[11px] font-bold tabular-nums"
+                className={`px-1.5 py-0.2 rounded-full text-[11px] font-bold tabular-nums transition-transform ${
+                  isCartBumping ? 'scale-125' : ''
+                }`}
                 style={{
                   backgroundColor: 'var(--accent)',
                   color: '#1b1114',
@@ -1754,7 +1880,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
               onClick={onOpenMerchant}
               aria-label={isMerchantAuthenticated ? 'Open Merchant Workspace' : 'Merchant Login'}
               title={isMerchantAuthenticated ? 'Open Merchant Workspace' : 'Merchant Login'}
-              className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border flex items-center justify-center transition-opacity opacity-80 hover:opacity-100 cursor-pointer shrink-0"
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border flex items-center justify-center transition-all opacity-80 hover:opacity-100 cursor-pointer shrink-0 btn-luxury active:scale-95"
               style={{
                 backgroundColor: 'var(--surface-elevated)',
                 borderColor: 'var(--border)',
@@ -1769,7 +1895,7 @@ export const Storefront: React.FC<StorefrontProps> = ({
         {/* Compact Mobile Search Bar */}
         <div className="md:hidden px-3 pb-2">
           <div
-            className="flex items-center rounded-lg px-3 py-1.5 border w-full"
+            className="flex items-center rounded-lg px-3 py-1.5 border w-full focus-within:border-[var(--primary)] transition-colors"
             style={{
               backgroundColor: 'var(--input-bg)',
               borderColor: 'var(--border)',
@@ -1801,6 +1927,66 @@ export const Storefront: React.FC<StorefrontProps> = ({
             )}
           </div>
         </div>
+
+        {/* Mobile Navigation Dropdown Drawer with smooth slide & fade */}
+        {isMobileMenuOpen && (
+          <div
+            className="xl:hidden border-t px-4 py-3 space-y-2 animate-fadeIn transition-all duration-300"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderColor: 'var(--border)',
+            }}
+          >
+            <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'var(--primary)' }}>
+              Curated Collections
+            </p>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {CATEGORIES.map((cat) => {
+                const isActive = activeCategory === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => {
+                      onCategoryChange(cat);
+                      setIsMobileMenuOpen(false);
+                      scrollToCatalog();
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 cursor-pointer active:scale-95"
+                    style={{
+                      backgroundColor: isActive ? 'var(--primary)' : 'var(--surface-elevated)',
+                      color: isActive ? 'var(--btn-text)' : 'var(--text-main)',
+                      border: `1px solid ${isActive ? 'var(--primary)' : 'var(--border)'}`,
+                    }}
+                  >
+                    {cat === 'All' ? 'Shop All' : cat}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="pt-2 border-t flex items-center justify-between text-xs" style={{ borderColor: 'var(--border)' }}>
+              <a
+                href="#story"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:underline py-1"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Our Heritage & Artisans →
+              </a>
+              {whatsappClean && (
+                <a
+                  href={`https://wa.me/${whatsappClean}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 font-semibold text-emerald-600 hover:text-emerald-700 py-1"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp Stylist</span>
+                </a>
+              )}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* 2. MERCHANT-CONFIGURABLE HOMEPAGE SECTIONS IN ORDER */}

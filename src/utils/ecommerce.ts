@@ -33,11 +33,21 @@ export interface OrderItem {
   qty: number;
 }
 
+export type OrderStatus =
+  | 'Pending'
+  | 'Order Received'
+  | 'Pending UPI Payment'
+  | 'Confirmed'
+  | 'Packed'
+  | 'Shipped'
+  | 'Delivered'
+  | 'Cancelled';
+
 export interface Order {
   id: string;
   customer_details: CustomerDetails;
   items: OrderItem[];
-  status: 'Pending UPI Payment' | 'Confirmed' | 'Packed' | 'Shipped' | 'Delivered' | 'Cancelled';
+  status: OrderStatus;
   payment_method: 'UPI' | 'COD' | 'RAZORPAY';
   upi_ref_id?: string;
   razorpay_payment_id?: string;
@@ -85,6 +95,134 @@ export function validateIndianPhone(phone: string): boolean {
   const cleanPhone = phone.replace(/[\s\-+]/g, '');
   // Match standard 10 digit Indian mobile starting with 6, 7, 8, or 9
   return /^[6-9]\d{9}$/.test(cleanPhone.slice(-10));
+}
+
+export interface WhatsAppValidationResult {
+  isValid: boolean;
+  rawDigits: string;
+  clean10Digits: string;
+  waId: string;
+  formattedDisplay: string;
+  error?: string;
+}
+
+/**
+ * Normalizes and validates an Indian WhatsApp number.
+ * Accepts input with or without country code (+91, 91, 0, spaces, dashes).
+ */
+export function validateIndianWhatsAppNumber(rawNumber?: string | null): WhatsAppValidationResult {
+  if (!rawNumber || typeof rawNumber !== 'string' || !rawNumber.trim()) {
+    return {
+      isValid: false,
+      rawDigits: '',
+      clean10Digits: '',
+      waId: '',
+      formattedDisplay: '',
+      error: 'No WhatsApp number configured yet.',
+    };
+  }
+
+  let digits = rawNumber.replace(/\D/g, '');
+  if (digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  }
+
+  if (digits.length === 0) {
+    return {
+      isValid: false,
+      rawDigits: '',
+      clean10Digits: '',
+      waId: '',
+      formattedDisplay: '',
+      error: 'Please enter a 10-digit mobile number.',
+    };
+  }
+
+  if (digits.length < 10) {
+    return {
+      isValid: false,
+      rawDigits: digits,
+      clean10Digits: digits,
+      waId: `91${digits}`,
+      formattedDisplay: `+91 ${digits}`,
+      error: `Incomplete number (${digits.length}/10 digits).`,
+    };
+  }
+
+  if (digits.length > 10) {
+    return {
+      isValid: false,
+      rawDigits: digits,
+      clean10Digits: digits.slice(-10),
+      waId: `91${digits.slice(-10)}`,
+      formattedDisplay: `+91 ${digits.slice(-10)}`,
+      error: 'Too many digits. Standard Indian numbers are 10 digits.',
+    };
+  }
+
+  if (!/^[6-9]/.test(digits)) {
+    return {
+      isValid: false,
+      rawDigits: digits,
+      clean10Digits: digits,
+      waId: `91${digits}`,
+      formattedDisplay: `+91 ${digits}`,
+      error: 'Indian mobile numbers must start with 6, 7, 8, or 9.',
+    };
+  }
+
+  return {
+    isValid: true,
+    rawDigits: digits,
+    clean10Digits: digits,
+    waId: `91${digits}`,
+    formattedDisplay: `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`,
+  };
+}
+
+/**
+ * Builds a direct wa.me link for manual contact
+ */
+export function buildWhatsAppLink(waIdOrDigits: string, message: string): string {
+  const digits = waIdOrDigits.replace(/\D/g, '');
+  const cleanId =
+    digits.startsWith('91') && digits.length === 12
+      ? digits
+      : digits.length === 10
+      ? `91${digits}`
+      : digits;
+  return `https://wa.me/${cleanId}?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * Formats a comprehensive prefilled message containing complete order details
+ * for the merchant to reach out to the customer manually.
+ */
+export function buildCustomerOrderWhatsAppMessage(
+  order: Order,
+  storeName: string,
+  merchantWaDisplay?: string
+): string {
+  const totalQty = order.items.reduce((s, i) => s + i.qty, 0);
+  const itemsList = order.items.map((i) => `${i.qty}x ${i.name}`).join(', ');
+  const address = `${order.customer_details.address}${
+    order.customer_details.city ? ', ' + order.customer_details.city : ''
+  }${order.customer_details.pincode ? ' - ' + order.customer_details.pincode : ''}`;
+
+  let msg = `Namaste ${order.customer_details.name}! Following up from ${storeName} regarding your Order #${order.id}.\n\n` +
+    `📦 Outfits Ordered: ${itemsList} (${totalQty} pcs)\n` +
+    `💰 Total: ${formatINR(order.total)}\n` +
+    `📍 Delivery to: ${address}\n` +
+    `📋 Order Status: ${order.status}`;
+
+  if (merchantWaDisplay) {
+    msg += `\n\nBoutique Care: ${merchantWaDisplay}`;
+  }
+
+  return msg;
 }
 
 /**
@@ -199,13 +337,13 @@ export function isRazorpayConfigured(keyId?: string | null, enabled: boolean = t
 }
 
 /**
- * Determines the initial order status without marking orders as paid unless verified.
- * - RAZORPAY requires a non-empty verified razorpayPaymentId
- * - UPI starts as 'Pending UPI Payment' until merchant verifies UTR
- * - COD starts as 'Confirmed' (to be paid upon doorstep delivery)
+ * Determines the initial order status when a customer submits an order.
+ * - Standard catalogue / COD orders start as 'Pending' until the merchant contacts the customer to confirm.
+ * - UPI starts as 'Pending UPI Payment' until merchant verifies UTR.
+ * - RAZORPAY requires a non-empty verified razorpayPaymentId.
  */
 export function resolveInitialOrderStatus(
-  paymentMethod: Order['payment_method'],
+  paymentMethod?: Order['payment_method'],
   razorpayPaymentId?: string
 ): Order['status'] {
   if (paymentMethod === 'RAZORPAY') {
@@ -217,7 +355,7 @@ export function resolveInitialOrderStatus(
   if (paymentMethod === 'UPI') {
     return 'Pending UPI Payment';
   }
-  return 'Confirmed';
+  return 'Pending';
 }
 
 export interface HeroSlide {
@@ -550,7 +688,7 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   logoUrl: '',
   faviconUrl: '',
   phone: '+91 98765 43210',
-  whatsapp: '919876543210',
+  whatsapp: '',
   email: 'support@indianishqcollection.com',
   weekdayHours: '10:00 AM – 8:00 PM IST',
   sundayHours: 'By Appointment & Online Orders',
@@ -1054,7 +1192,10 @@ export function mergeAndSanitizeStoreSettings(
     logoUrl: pickOptionalString(incoming.logoUrl, fallback.logoUrl),
     faviconUrl: pickOptionalString(incoming.faviconUrl, fallback.faviconUrl || ''),
     phone: pickNonBlank(incoming.phone, fallback.phone),
-    whatsapp: pickNonBlank(incoming.whatsapp, fallback.whatsapp),
+    whatsapp:
+      typeof incoming.whatsapp === 'string'
+        ? incoming.whatsapp.trim()
+        : fallback.whatsapp || '',
     email: pickNonBlank(incoming.email, fallback.email),
     weekdayHours: pickNonBlank(incoming.weekdayHours, fallback.weekdayHours),
     sundayHours: pickNonBlank(incoming.sundayHours, fallback.sundayHours),
@@ -1317,3 +1458,29 @@ export const initialOrders: Order[] = [
     created_at: new Date(Date.now() - 3600000 * 12).toISOString(),
   },
 ];
+
+/**
+ * Pure helper to compute circular slideshow index for next/previous navigation
+ * and preloading the upcoming hero slide image for zero-flash crossfades.
+ */
+export function resolveSlideIndex(currentIndex: number, delta: number, totalSlides: number): number {
+  if (totalSlides <= 0) return 0;
+  const safeCurrent = Math.max(0, currentIndex) % totalSlides;
+  return (safeCurrent + delta + totalSlides * 10) % totalSlides;
+}
+
+/**
+ * Pure helper to determine whether a homepage section should animate on scroll
+ * or render immediately visible (e.g. hero section, reduced-motion preference,
+ * or unsupported IntersectionObserver).
+ */
+export function shouldAnimateSectionReveal(params: {
+  sectionId: string;
+  prefersReducedMotion: boolean;
+  hasIntersectionObserver: boolean;
+}): boolean {
+  if (params.sectionId === 'hero') return false;
+  if (params.prefersReducedMotion || !params.hasIntersectionObserver) return false;
+  return true;
+}
+
